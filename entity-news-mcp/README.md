@@ -58,9 +58,19 @@ The HTTP server will start on `http://localhost:8000`
 ## Connecting to OpenAI Agent Builder
 
 1. **For Local Development (HTTP):**
-   - Start the HTTP server: `uv run python http_server.py`
-   - Use URL: `http://localhost:8000`
-   - Note: Agent Builder may require HTTPS in production
+   - To connect your local server to OpenAI's Agent Builder, you'll need a public HTTPS URL. `ngrok` is a great tool for this.
+   - Run these two commands in parallel in separate terminals:
+
+   Terminal 1: Start the HTTP server
+   ```bash
+   uv run http_server.py
+   ```
+
+   Terminal 2: Expose the server with ngrok
+   ```bash
+   ngrok http 8000
+   ```
+   - `ngrok` will provide a public HTTPS URL (e.g., `https://<random-string>.ngrok.io`). Use this URL in Agent Builder.
 
 2. **For Production (HTTPS):**
    - Deploy the server to a platform that provides HTTPS (e.g., Railway, Render, Fly.io)
