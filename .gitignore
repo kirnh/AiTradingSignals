@@ -1,9 +1,17 @@
+# Aider
 .aider*
-# Python
+
+### Python ###
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
 
 # Virtual environment
 venv/
@@ -11,10 +19,20 @@ venv/
 env/
 .env
 
-# Build artifacts
-build/
-dist/
-*.egg-info/
+# Testing & Type Checking
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+### IDEs ###
+.idea/
+.vscode/
+
+### OS ###
 # macOS
 .DS_Store
