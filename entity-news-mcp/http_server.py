@@ -20,6 +20,36 @@ from utils import get_entity_news_from_api, get_entity_news_from_gnews
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _get_entity_news(entity_name: str) -> List[Dict[str, Any]]:
+    """Helper function to fetch news from all sources."""
+    list1 = get_entity_news_from_api(entity_name)
+    list2 = get_entity_news_from_gnews(entity_name)
+    return list1 + list2
+
+
+def _get_mcp_tool_list() -> Dict[str, Any]:
+    """Helper function to get list of tools in MCP format."""
+    return {
+        "tools": [
+            {
+                "name": "get_entity_news",
+                "description": "Get news articles for an entity",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "entity_name": {
+                            "type": "string",
+                            "description": "Name of the entity to search for"
+                        }
+                    },
+                    "required": ["entity_name"]
+                }
+            }
+        ]
+    }
+
+
 app = FastAPI(
     title="Entity News MCP Server",
     description="HTTP wrapper for Entity News MCP tools",
@@ -116,11 +146,7 @@ async def get_entity_news_tool(request: ToolRequest):
     This endpoint wraps the MCP tool and exposes it via HTTP
     """
     try:
-        # Call the underlying functions
-        list1 = get_entity_news_from_api(request.entity_name)
-        list2 = get_entity_news_from_gnews(request.entity_name)
-        result = list1 + list2
-        
+        result = _get_entity_news(request.entity_name)
         return ToolResponse(
             success=True,
             data=result
@@ -171,9 +197,7 @@ async def mcp_tool_call(request: Dict[str, Any]):
             if not entity_name:
                 raise HTTPException(status_code=400, detail="entity_name is required")
             
-            list1 = get_entity_news_from_api(entity_name)
-            list2 = get_entity_news_from_gnews(entity_name)
-            result = list1 + list2
+            result = _get_entity_news(entity_name)
             
             return {
                 "content": [
@@ -237,24 +261,7 @@ async def mcp_jsonrpc(request: Request):
         
         # Handle different MCP methods
         if method == "tools/list" or method == "tools/list_tools":
-            result = {
-                "tools": [
-                    {
-                        "name": "get_entity_news",
-                        "description": "Get news articles for an entity",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "entity_name": {
-                                    "type": "string",
-                                    "description": "Name of the entity to search for"
-                                }
-                            },
-                            "required": ["entity_name"]
-                        }
-                    }
-                ]
-            }
+            result = _get_mcp_tool_list()
             return {
                 "jsonrpc": "2.0",
                 "result": result,
@@ -279,9 +286,7 @@ async def mcp_jsonrpc(request: Request):
                     }
                 
                 try:
-                    list1 = get_entity_news_from_api(entity_name)
-                    list2 = get_entity_news_from_gnews(entity_name)
-                    result = list1 + list2
+                    result = _get_entity_news(entity_name)
                     
                     return {
                         "jsonrpc": "2.0",
@@ -360,24 +365,7 @@ async def mcp_jsonrpc(request: Request):
 @app.get("/mcp/tools/list")
 async def mcp_list_tools():
     """List tools in MCP format (legacy endpoint)"""
-    return {
-        "tools": [
-            {
-                "name": "get_entity_news",
-                "description": "Get news articles for an entity",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "entity_name": {
-                            "type": "string",
-                            "description": "Name of the entity to search for"
-                        }
-                    },
-                    "required": ["entity_name"]
-                }
-            }
-        ]
-    }
+    return _get_mcp_tool_list()
 
 
 # SSE endpoint for MCP protocol streaming
@@ -403,24 +391,7 @@ async def mcp_sse(request: Request):
             
             # Process the request using the same logic as /mcp endpoint
             if method == "tools/list" or method == "tools/list_tools":
-                result = {
-                    "tools": [
-                        {
-                            "name": "get_entity_news",
-                            "description": "Get news articles for an entity",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "entity_name": {
-                                        "type": "string",
-                                        "description": "Name of the entity to search for"
-                                    }
-                                },
-                                "required": ["entity_name"]
-                            }
-                        }
-                    ]
-                }
+                result = _get_mcp_tool_list()
                 return {
                     "jsonrpc": "2.0",
                     "result": result,
@@ -445,9 +416,7 @@ async def mcp_sse(request: Request):
                         }
                     
                     try:
-                        list1 = get_entity_news_from_api(entity_name)
-                        list2 = get_entity_news_from_gnews(entity_name)
-                        result = list1 + list2
+                        result = _get_entity_news(entity_name)
                         
                         return {
                             "jsonrpc": "2.0",
