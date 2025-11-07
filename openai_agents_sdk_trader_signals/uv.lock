@@ -538,6 +538,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "openai-agents" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "requests" },
 ]
 
@@ -546,6 +547,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "openai-agents", specifier = ">=0.5.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
 ]
 

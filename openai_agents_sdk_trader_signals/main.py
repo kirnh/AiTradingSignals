@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+from dotenv import load_dotenv
 from agents import Agent, Runner
 from tools import get_entity_news, fetch_article_content, get_tool_call_count, reset_tool_call_counter
 from prompts import (
@@ -10,6 +11,9 @@ from prompts import (
     sentiment_analysis_agent_config
 )
 from schemas import EntityEnrichmentOutput, NewsAggregationOutput, SentimentAnalysisOutput
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure verbose logging
 logging.basicConfig(
@@ -268,6 +272,23 @@ async def main():
         return
     
     logger.info("✓ OPENAI_API_KEY found")
+    
+    # Check for news API configuration
+    news_api_provider = os.getenv("NEWS_API_PROVIDER", "gnews").lower()
+    logger.info(f"News API Provider: {news_api_provider}")
+    
+    if news_api_provider == "gnews":
+        if not os.getenv("GNEWS_API_KEY"):
+            logger.warning("GNEWS_API_KEY not set, using default key")
+        else:
+            logger.info("✓ GNEWS_API_KEY found")
+    elif news_api_provider == "newsapi":
+        if not os.getenv("NEWSAPI_KEY"):
+            logger.warning("NEWSAPI_KEY not set, using default key")
+        else:
+            logger.info("✓ NEWSAPI_KEY found")
+    else:
+        logger.warning(f"Unknown NEWS_API_PROVIDER '{news_api_provider}', defaulting to 'gnews'")
     
     # Example usage
     companies = ["Apple", "Microsoft", "Tesla"]

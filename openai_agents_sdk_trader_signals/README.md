@@ -23,42 +23,7 @@ The system uses three specialized agents that work in a pipeline, with **structu
 
 ## Structured Outputs with Pydantic
 
-All agents use **Pydantic schemas** for structured outputs, ensuring type-safe, validated responses:
-
-```python
-import asyncio
-from pydantic import BaseModel, Field
-from typing import List
-from agents import Agent, Runner
-
-# Define output schema
-class EntityEnrichmentOutput(BaseModel):
-    company_name: str
-    entities: List[RelatedEntity] = Field(min_length=1)
-
-# Agent returns validated data matching this schema
-agent = Agent(
-    name="Entity Enrichment Agent",
-    instructions="...",
-    tools=[],
-    model="gpt-4o",
-    output_type=EntityEnrichmentOutput  # ← Pydantic schema
-)
-
-# Get validated output (runner.run() is async!)
-async def run_agent():
-    runner = Runner()
-    result = await runner.run(agent, input='{"company_name": "Apple"}')
-    
-    # Get the structured output (automatically validated!)
-    data = result.final_output_as(EntityEnrichmentOutput)
-    
-    # Type-safe access with IDE auto-completion
-    print(data.company_name)  # "Apple"
-    print(data.entities[0].entity_name)  # "TSMC"
-
-asyncio.run(run_agent())
-```
+All agents use **Pydantic schemas** for structured outputs, ensuring type-safe, validated responses. You define output schemas using Pydantic BaseModel classes, and agents return validated data matching these schemas. The system automatically validates all outputs, providing type safety and IDE support.
 
 **Benefits:**
 - ✅ Guaranteed format from LLM responses
@@ -76,30 +41,7 @@ asyncio.run(run_agent())
 
 ## How Tools Connect to Agents
 
-```python
-from agents import Agent
-from tools import get_entity_news, fetch_article_content
-from prompts import entity_enrichment_agent_config
-from schemas import EntityEnrichmentOutput, NewsAggregationOutput
-
-# Create an agent with custom tools and structured output
-news_agent = Agent(
-    name="News Aggregation Agent",
-    instructions="Fetch news for companies",
-    tools=[get_entity_news],  # ← Custom tools
-    model="gpt-4o",
-    output_type=NewsAggregationOutput  # ← Pydantic schema
-)
-
-# Or use built-in capabilities like web browsing
-enrichment_agent = Agent(
-    name="Entity Enrichment Agent",
-    instructions=entity_enrichment_agent_config["instructions"],
-    tools=[],  # ← Built-in web browsing
-    model="gpt-4o",
-    output_type=EntityEnrichmentOutput  # ← Structured output
-)
-```
+Agents can use custom tools or built-in capabilities. Custom tools are passed to the Agent constructor, while built-in capabilities like web browsing are available without explicit tool configuration. Each agent specifies its output schema using Pydantic models for structured, validated responses.
 
 ### Tool Requirements
 
@@ -108,28 +50,6 @@ Each tool must be a **Python function decorated with `@function_tool`** with:
 2. **Type hints** for parameters and return value
 3. **Docstring** explaining what it does
 4. **String return type** (for OpenAI Agents SDK)
-
-Example:
-
-```python
-from agents import function_tool
-import json
-
-@function_tool  # ← Required decorator!
-def get_entity_news(entity_name: str, num_results: int = 10) -> str:
-    """
-    Fetch news articles for an entity using GNews API.
-    
-    Args:
-        entity_name: Name of the entity to fetch news for
-        num_results: Number of articles to fetch (default: 10)
-        
-    Returns:
-        JSON string containing news articles
-    """
-    # Implementation here
-    return json.dumps(articles)
-```
 
 The `@function_tool` decorator:
 - Wraps the function as a `FunctionTool` object
@@ -140,74 +60,41 @@ The `@function_tool` decorator:
 
 ## Installation
 
-1. Install dependencies:
-```bash
-uv sync
-# or
-pip install -e .
-```
+1. Install dependencies using `uv sync` or `pip install -e .`
 
-2. Set your OpenAI API key:
-```bash
-export OPENAI_API_KEY='your-api-key-here'
-```
+2. Create a `.env` file by copying `.env.example` to `.env`, then edit it to add your API keys. The `.env` file should contain:
+   - `OPENAI_API_KEY`: Your OpenAI API key (required)
+   - `NEWS_API_PROVIDER`: Set to `gnews` or `newsapi` to choose which provider to use
+   - `GNEWS_API_KEY`: Your GNews API key (if using GNews)
+   - `NEWSAPI_KEY`: Your NewsAPI key (if using NewsAPI)
+
+**News API Configuration:**
+- Set `NEWS_API_PROVIDER` to `'gnews'` (default) or `'newsapi'` to choose which provider to use
+- Set the corresponding API key (`GNEWS_API_KEY` or `NEWSAPI_KEY`)
+- If not set, default API keys are used (may have rate limits)
+
+**Note:** The `.env` file is automatically loaded when the application starts. You don't need to export environment variables manually.
 
 ## Verbose Logging
 
-The system includes **comprehensive verbose logging** to help you understand what's happening at every step:
-
-```python
-# Logging is automatically configured with DEBUG level
-# Shows:
-# - Agent initialization and execution
-# - Tool calls and results
-# - API requests and responses
-# - Data processing steps
-# - Errors with full stack traces
-```
+The system includes **comprehensive verbose logging** to help you understand what's happening at every step. Logging is automatically configured with DEBUG level and shows agent initialization and execution, tool calls and results, API requests and responses, data processing steps, and errors with full stack traces.
 
 **Log levels:**
 - `INFO` - Major steps and results
 - `DEBUG` - Detailed execution flow, API calls, data processing
 - `ERROR` - Errors with stack traces
 
-**Example log output:**
-```
-2025-11-07 14:30:00 - main - INFO - PIPELINE START: Trading Signal Analysis for Apple
-2025-11-07 14:30:00 - main - INFO - STEP 1: Entity Enrichment - Starting...
-2025-11-07 14:30:00 - main - DEBUG - Agent: Entity Enrichment Agent
-2025-11-07 14:30:05 - main - INFO - ✓ Found 5 related entities
-2025-11-07 14:30:05 - tools - INFO - TOOL CALL: get_entity_news(entity_name='TSMC', num_results=10)
-2025-11-07 14:30:06 - tools - DEBUG - API response status: 200
-2025-11-07 14:30:06 - tools - INFO - ✓ Fetched 10 articles for 'TSMC'
-```
-
-All logs include **timestamps**, **module names**, and **log levels** for easy debugging.
+All logs include **timestamps**, **module names**, and **log levels** for easy debugging. Example log entries show pipeline start, agent execution steps, tool calls, API responses, and results.
 
 ## Usage
 
 ### Basic Usage
 
-```python
-import asyncio
-from main import run_trading_signal_pipeline
-
-# Analyze a company (async function)
-async def analyze():
-    result = await run_trading_signal_pipeline("Apple")
-    return result
-
-# Run it
-result = asyncio.run(analyze())
-```
+Import `run_trading_signal_pipeline` from `main` and call it asynchronously with a company name. The function returns a structured result with all analysis data.
 
 ### Run the Complete Pipeline
 
-```bash
-python main.py
-```
-
-This will:
+Run `python main.py` to execute the complete pipeline. This will:
 1. Analyze the target company (default: Apple)
 2. Find related entities
 3. Fetch news for each entity
@@ -216,41 +103,17 @@ This will:
 
 ### Using Individual Agents
 
-```python
-import json
-import asyncio
-from agents import Runner
-from main import entity_enrichment_agent
-from schemas import EntityEnrichmentOutput
-
-async def use_single_agent():
-    runner = Runner()
-    
-    # Use just the entity enrichment agent
-    result = await runner.run(
-        entity_enrichment_agent,
-        input=json.dumps({"company_name": "Microsoft"})
-    )
-    
-    # Get the structured output (automatically validated!)
-    data = result.final_output_as(EntityEnrichmentOutput)
-    print(f"Found {len(data.entities)} entities for {data.company_name}")
-
-asyncio.run(use_single_agent())
-```
+You can use individual agents by importing them from `main` and using the `Runner` class. Create a Runner instance, call `run()` with the agent and input data, then access the structured output using `final_output_as()` with the appropriate schema class.
 
 ## Project Structure
 
-```
-.
-├── main.py           # Main pipeline and agent initialization
-├── prompts.py        # Agent instructions and configurations
-├── tools.py          # Tool functions for agents
-├── schemas.py        # Pydantic schemas for structured outputs
-├── pyproject.toml    # Dependencies
-├── README.md         # This file (full documentation)
-└── QUICK_START.md    # Quick reference guide with examples
-```
+The project contains:
+- `main.py`: Main pipeline and agent initialization
+- `prompts.py`: Agent instructions and configurations
+- `tools.py`: Tool functions for agents
+- `schemas.py`: Pydantic schemas for structured outputs
+- `pyproject.toml`: Dependencies
+- `README.md`: This file (full documentation)
 
 ## Tool-to-Agent Mapping
 
@@ -262,93 +125,41 @@ asyncio.run(use_single_agent())
 
 ## Data Flow
 
-```
-Input: Company Name
-    ↓
-[Entity Enrichment Agent]
-    ↓ (uses web browsing to find real-time data)
-Related Entities + Relationships
-    ↓
-[News Aggregation Agent]
-    ↓ (uses get_entity_news)
-Entities + News Articles
-    ↓
-[Sentiment Analysis Agent]
-    ↓ (uses fetch_article_content)
-Sentiment Tokens + Trading Signals
-    ↓
-Output: JSON with actionable insights
-```
+The pipeline processes data through three stages:
+1. **Input**: Company Name
+2. **Entity Enrichment Agent**: Uses web browsing to find real-time data and discover related entities with relationships
+3. **News Aggregation Agent**: Uses `get_entity_news` to fetch news articles for each entity
+4. **Sentiment Analysis Agent**: Uses `fetch_article_content` to parse articles and extract sentiment tokens
+5. **Output**: JSON with actionable trading signals and insights
 
 ## Extending the System
 
 ### Adding a New Tool
 
-1. **Create the tool function in `tools.py`:**
+1. **Create the tool function in `tools.py`**: Define a function with the `@function_tool` decorator, include type hints and a docstring, and return a JSON string.
 
-```python
-from agents import function_tool
-import json
-
-@function_tool  # ← Don't forget the decorator!
-def get_stock_price(ticker: str) -> str:
-    """
-    Fetch current stock price for a ticker.
-    
-    Args:
-        ticker: Stock ticker symbol
-        
-    Returns:
-        JSON string with price data
-    """
-    # Implementation
-    return json.dumps({"ticker": ticker, "price": 150.25})
-```
-
-2. **Add it to an agent in `main.py`:**
-
-```python
-entity_enrichment_agent = Agent(
-    name="Entity Enrichment Agent",
-    instructions=entity_enrichment_agent_config["instructions"],
-    tools=[search_related_entities, get_stock_price],  # Add here
-    model="gpt-4o"
-)
-```
+2. **Add it to an agent in `main.py`**: Include the tool in the `tools` parameter when creating the agent.
 
 3. **Update the agent instructions in `prompts.py`** to mention the new tool.
 
 ### Creating a New Agent
 
-1. **Add configuration to `prompts.py`:**
+1. **Add configuration to `prompts.py`**: Define an agent configuration dictionary with instructions and output format.
 
-```python
-risk_assessment_agent_config = {
-    "instructions": """Analyze risk factors...""",
-    "input_format": {...},
-    "output_format": {...}
-}
-```
+2. **Create the agent in `main.py`**: Instantiate an Agent with the configuration, tools, and model.
 
-2. **Create the agent in `main.py`:**
-
-```python
-risk_assessment_agent = Agent(
-    name="Risk Assessment Agent",
-    instructions=risk_assessment_agent_config["instructions"],
-    tools=[your_tools_here],
-    model="gpt-4o"
-)
-```
-
-3. **Integrate into the pipeline.**
+3. **Integrate into the pipeline**: Add the agent to the pipeline workflow.
 
 ## API Keys
 
-The system uses two external APIs:
+The system uses the following external APIs:
 
 - **OpenAI API**: Required for agent operations (set `OPENAI_API_KEY`)
-- **GNews API**: Used for news fetching (key included, but get your own at https://gnews.io)
+- **News API**: Configurable news provider (set `NEWS_API_PROVIDER` to choose):
+  - **GNews** (default): Set `GNEWS_API_KEY` - Get free key at https://gnews.io
+  - **NewsAPI**: Set `NEWSAPI_KEY` - Get free key at https://newsapi.org
+
+**Example configuration in `.env` file**: Set `NEWS_API_PROVIDER` to `gnews` or `newsapi`, then provide the corresponding API key (`GNEWS_API_KEY` or `NEWSAPI_KEY`).
 
 ## Notes
 
@@ -364,27 +175,7 @@ The system uses two external APIs:
 
 ## Example Output
 
-```json
-{
-  "company_name": "Apple",
-  "entities": [
-    {
-      "entity_name": "TSMC",
-      "relationship_strength": 0.95,
-      "relationship_type": "supplier",
-      "news": [...],
-      "sentiment_tokens": [
-        {
-          "tokenText": "TSMC expands production capacity",
-          "impact": "positive",
-          "direction": "bullish",
-          "strength": 0.75
-        }
-      ]
-    }
-  ]
-}
-```
+The system outputs a JSON structure containing the company name, a list of entities with their relationship information, associated news articles, and sentiment tokens. Each sentiment token includes the token text, impact (positive/negative/neutral), direction (bullish/bearish/neutral), and strength (0.0 to 1.0).
 
 ## License
 
