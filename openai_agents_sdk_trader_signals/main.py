@@ -3,7 +3,7 @@ import json
 import asyncio
 import logging
 from agents import Agent, Runner
-from tools import get_entity_news, fetch_article_content
+from tools import get_entity_news, fetch_article_content, get_tool_call_count, reset_tool_call_counter
 from prompts import (
     entity_enrichment_agent_config,
     news_aggregation_agent_config,
@@ -57,6 +57,9 @@ async def run_trading_signal_pipeline(company_name: str):
     Returns:
         SentimentAnalysisOutput: Validated structured output with all analysis
     """
+    # Reset tool call counters at the start
+    reset_tool_call_counter()
+    
     logger.info("="*60)
     logger.info(f"PIPELINE START: Trading Signal Analysis for {company_name}")
     logger.info("="*60)
@@ -85,13 +88,19 @@ async def run_trading_signal_pipeline(company_name: str):
     enrichment_data = enrichment_result.final_output_as(EntityEnrichmentOutput)
     logger.info(f"✓ Found {len(enrichment_data.entities)} related entities")
     
+    # Save Step 1 output
+    step1_file = f"step1_entity_enrichment_{company_name.lower().replace(' ', '_')}.json"
+    with open(step1_file, 'w') as f:
+        json.dump(enrichment_data.model_dump(), f, indent=2)
+    logger.info(f"✓ Saved Step 1 output to: {step1_file}")
+    
     print(f"✓ Found {len(enrichment_data.entities)} related entities")
-    for entity in enrichment_data.entities[:3]:
+    for entity in enrichment_data.entities:
         logger.debug(f"Entity: {entity.entity_name} - {entity.relationship_type} (strength: {entity.relationship_strength})")
         print(f"  - {entity.entity_name} ({entity.relationship_type}, strength: {entity.relationship_strength})")
-    if len(enrichment_data.entities) > 3:
-        logger.debug(f"... and {len(enrichment_data.entities) - 3} more entities")
-        print(f"  ... and {len(enrichment_data.entities) - 3} more")
+    
+    # Log all entities
+    logger.info(f"All entities: {[e.entity_name for e in enrichment_data.entities]}")
     
     # Step 2: News Aggregation (returns NewsAggregationOutput)
     logger.info("-"*60)
@@ -100,8 +109,15 @@ async def run_trading_signal_pipeline(company_name: str):
     logger.debug(f"Agent tools: {[t.name for t in news_aggregation_agent.tools]}")
     logger.debug(f"Processing {len(enrichment_data.entities)} entities")
     
+    # Log all entity names that should get news
+    entity_names = [e.entity_name for e in enrichment_data.entities]
+    logger.info(f"Entities to fetch news for: {entity_names}")
+    logger.info(f"⚠️  CRITICAL: Agent MUST call get_entity_news() {len(entity_names)} times (once per entity)")
+    
     print("\n" + "-"*60)
     print("Step 2: News Aggregation - Fetching news for entities...")
+    print(f"  Entities: {', '.join(entity_names[:5])}{', ...' if len(entity_names) > 5 else ''}")
+    print(f"  Expected: {len(entity_names)} tool calls")
     
     news_result = await runner.run(
         news_aggregation_agent,
@@ -114,8 +130,43 @@ async def run_trading_signal_pipeline(company_name: str):
     total_articles = sum(len(entity.news) for entity in news_data.entities)
     logger.info(f"✓ Aggregated {total_articles} news articles across {len(news_data.entities)} entities")
     
+    # Save Step 2 output
+    step2_file = f"step2_news_aggregation_{company_name.lower().replace(' ', '_')}.json"
+    with open(step2_file, 'w') as f:
+        json.dump(news_data.model_dump(), f, indent=2)
+    logger.info(f"✓ Saved Step 2 output to: {step2_file}")
+    
     for entity in news_data.entities:
         logger.debug(f"Entity '{entity.entity_name}': {len(entity.news)} articles found")
+    
+    # Check if all entities from step 1 are in step 2
+    step1_entities = set(e.entity_name for e in enrichment_data.entities)
+    step2_entities = set(e.entity_name for e in news_data.entities)
+    missing_entities = step1_entities - step2_entities
+    if missing_entities:
+        logger.warning(f"⚠️ Missing entities in Step 2: {missing_entities}")
+    
+    # Check tool call count
+    tool_calls = get_tool_call_count("get_entity_news")
+    expected_calls = len(entity_names)
+    logger.info(f"Tool call summary: get_entity_news called {tool_calls} times (expected: {expected_calls})")
+    print(f"\n  Tool calls: {tool_calls} / {expected_calls} expected")
+    
+    if tool_calls < expected_calls:
+        logger.error(f"🚨 CRITICAL: get_entity_news only called {tool_calls} times, expected {expected_calls}!")
+        logger.error(f"The agent did not fetch news for all entities!")
+        print(f"  ⚠️  WARNING: Only {tool_calls} tool calls made, expected {expected_calls}")
+    
+    # Check for entities with empty news (this indicates the tool wasn't called properly)
+    entities_with_no_news = [e.entity_name for e in news_data.entities if len(e.news) == 0]
+    if entities_with_no_news:
+        logger.error(f"🚨 CRITICAL: {len(entities_with_no_news)} entities have NO news articles: {entities_with_no_news}")
+        logger.error(f"This means get_entity_news was not called or returned empty results for these entities!")
+        print(f"\n⚠️  WARNING: {len(entities_with_no_news)} entities have no news:")
+        for name in entities_with_no_news[:5]:
+            print(f"  - {name}")
+        if len(entities_with_no_news) > 5:
+            print(f"  ... and {len(entities_with_no_news) - 5} more")
     
     print(f"✓ Aggregated {total_articles} news articles across {len(news_data.entities)} entities")
     
@@ -140,6 +191,22 @@ async def run_trading_signal_pipeline(company_name: str):
     total_tokens = sum(len(entity.sentiment_tokens) for entity in sentiment_data.entities)
     logger.info(f"✓ Generated {total_tokens} sentiment tokens")
     
+    # Save Step 3 output
+    step3_file = f"step3_sentiment_analysis_{company_name.lower().replace(' ', '_')}.json"
+    with open(step3_file, 'w') as f:
+        json.dump(sentiment_data.model_dump(), f, indent=2)
+    logger.info(f"✓ Saved Step 3 output to: {step3_file}")
+    
+    # Check if all entities from step 2 are in step 3
+    step3_entities = set(e.entity_name for e in sentiment_data.entities)
+    missing_entities_step3 = step2_entities - step3_entities
+    if missing_entities_step3:
+        logger.warning(f"⚠️ Missing entities in Step 3: {missing_entities_step3}")
+    
+    # Log token distribution
+    for entity in sentiment_data.entities:
+        logger.debug(f"Entity '{entity.entity_name}': {len(entity.sentiment_tokens)} sentiment tokens")
+    
     print(f"✓ Generated {total_tokens} sentiment tokens")
     
     # Show sample sentiment tokens
@@ -156,6 +223,28 @@ async def run_trading_signal_pipeline(company_name: str):
     print(f"\n{'='*60}")
     print("Pipeline Complete!")
     print(f"{'='*60}\n")
+    
+    # Pipeline Summary
+    logger.info("="*60)
+    logger.info("PIPELINE SUMMARY")
+    logger.info("="*60)
+    logger.info(f"Step 1 - Entity Enrichment: {len(enrichment_data.entities)} entities found")
+    logger.info(f"Step 2 - News Aggregation: {len(news_data.entities)} entities with news")
+    logger.info(f"Step 3 - Sentiment Analysis: {len(sentiment_data.entities)} entities with sentiment")
+    
+    if len(enrichment_data.entities) != len(news_data.entities):
+        logger.warning(f"⚠️ Entity count mismatch: Step 1 ({len(enrichment_data.entities)}) vs Step 2 ({len(news_data.entities)})")
+    if len(news_data.entities) != len(sentiment_data.entities):
+        logger.warning(f"⚠️ Entity count mismatch: Step 2 ({len(news_data.entities)}) vs Step 3 ({len(sentiment_data.entities)})")
+    
+    logger.info(f"Total news articles: {total_articles}")
+    logger.info(f"Total sentiment tokens: {total_tokens}")
+    
+    # Print intermediate files saved
+    logger.info("Intermediate outputs saved:")
+    logger.info(f"  - {step1_file}")
+    logger.info(f"  - {step2_file}")
+    logger.info(f"  - {step3_file}")
     
     logger.info("="*60)
     logger.info("PIPELINE COMPLETE")

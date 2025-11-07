@@ -7,6 +7,9 @@ import logging
 # Configure logger for tools
 logger = logging.getLogger(__name__)
 
+# Tool call counter for debugging
+_tool_call_counter = {"get_entity_news": 0, "fetch_article_content": 0}
+
 
 
 @function_tool
@@ -21,7 +24,10 @@ def get_entity_news(entity_name: str, num_results: int = 10) -> str:
     Returns:
         JSON string containing news articles with url, published_date, source, title, description
     """
-    logger.info(f"TOOL CALL: get_entity_news(entity_name='{entity_name}', num_results={num_results})")
+    _tool_call_counter["get_entity_news"] += 1
+    call_count = _tool_call_counter["get_entity_news"]
+    logger.info(f"🔧 TOOL CALL #{call_count}: get_entity_news(entity_name='{entity_name}', num_results={num_results})")
+    print(f"  → Tool call #{call_count}: Fetching news for '{entity_name}'")
     
     url = "https://gnews.io/api/v4/search"
     
@@ -76,7 +82,10 @@ def fetch_article_content(url: str) -> str:
     Returns:
         String containing the article title and main text content
     """
-    logger.info(f"TOOL CALL: fetch_article_content(url='{url[:50]}...')")
+    _tool_call_counter["fetch_article_content"] += 1
+    call_count = _tool_call_counter["fetch_article_content"]
+    logger.info(f"🔧 TOOL CALL #{call_count}: fetch_article_content(url='{url[:50]}...')")
+    print(f"  → Tool call #{call_count}: Fetching article content")
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -126,3 +135,17 @@ def fetch_article_content(url: str) -> str:
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching article from {url}: {e}", exc_info=True)
         return f"Error fetching article: {str(e)}"
+
+
+def get_tool_call_count(tool_name: str = None) -> dict:
+    """Get the tool call counter for debugging."""
+    if tool_name:
+        return _tool_call_counter.get(tool_name, 0)
+    return _tool_call_counter.copy()
+
+
+def reset_tool_call_counter():
+    """Reset all tool call counters."""
+    global _tool_call_counter
+    _tool_call_counter = {"get_entity_news": 0, "fetch_article_content": 0}
+    logger.info("Tool call counters reset")
