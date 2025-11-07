@@ -36,3 +36,6 @@ htmlcov/
 ### OS ###
 # macOS
 .DS_Store
+
+# Generated files
+system_diag.pdf
