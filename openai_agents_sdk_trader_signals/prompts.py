@@ -57,55 +57,78 @@ sentiment_analysis_agent_config = {
                         partners, investors) and extract MULTIPLE sentiment signals that impact the original 
                         company being analyzed.
                         
-                        ⚠️ CRITICAL REQUIREMENT - THIS IS MANDATORY: You MUST extract EXACTLY 3-5 sentiment tokens 
-                        PER ARTICLE. The schema REQUIRES a minimum of 3 tokens per article. If you provide fewer 
-                        than 3 tokens, the output will be INVALID and the system will fail.
+                        🚨 CRITICAL REQUIREMENT #1 - PROCESS ALL ENTITIES: You MUST process EVERY SINGLE entity 
+                        in the input. Count the entities in the input and ensure your output contains the EXACT 
+                        SAME NUMBER of entities. If the input has 2 entities, your output MUST have 2 entities. 
+                        If the input has 10 entities, your output MUST have 10 entities. DO NOT skip any entities, 
+                        even if it takes longer to process. The system processes entities in batches, so you may 
+                        receive a subset of entities - you MUST process ALL entities in the batch you receive.
+                        
+                        🚨 CRITICAL REQUIREMENT #2 - PROCESS ALL ARTICLES: For EACH entity, you MUST process 
+                        EVERY SINGLE news article. If an entity has 10 articles in the input, your output MUST 
+                        have 10 articles for that entity. DO NOT skip any articles.
+                        
+                        🚨 CRITICAL REQUIREMENT #3 - MULTIPLE TOKENS PER ARTICLE: You MUST extract EXACTLY 5 sentiment tokens 
+                        PER ARTICLE. The schema REQUIRES a minimum of 5 tokens per article. If you provide fewer 
+                        than 5 tokens, the output will be INVALID and the system will fail.
                         
                         Each article contains multiple events, implications, financial impacts, strategic moves, 
-                        or market signals. You MUST identify and extract at least 3 distinct signals from each article.
+                        or market signals. You MUST identify and extract at least 5 distinct signals from each article.
                         
                         CRITICAL STRUCTURE: Each news article must have its own sentiment_tokens array with 
-                        EXACTLY 3-5 tokens (minimum 3, maximum 5 per article).
+                        EXACTLY 5 tokens (minimum 5, maximum 5 per article).
                         The output structure should be:
                         - company_name
-                        - entities[] (list of entities)
-                          - entity_name, relationship_strength, relationship_type
-                          - news[] (list of news articles)
-                            - url, title, source, published_date
-                            - sentiment_tokens[] (EXACTLY 3-5 sentiment tokens FOR THIS ARTICLE - REQUIRED)
+                        - entities[] (list of ALL entities from input - SAME COUNT REQUIRED)
+                          - entity_name, relationship_strength, relationship_type (preserve from input)
+                          - news[] (list of ALL news articles for this entity - SAME COUNT REQUIRED)
+                            - url, title, source, published_date (preserve from input)
+                            - sentiment_tokens[] (EXACTLY 5 sentiment tokens FOR THIS ARTICLE - REQUIRED)
                         
-                        WORKFLOW (FOLLOW EXACTLY):
-                        1. Process ALL entities in the input
-                        2. For EACH entity, process ALL of its news articles
-                        3. For EACH news article:
-                           a. MANDATORY: Use fetch_article_content(url) to get the FULL article text - DO NOT skip this step
-                           b. Read and analyze the ENTIRE article content carefully - look for multiple signals
-                           c. Identify AT LEAST 3-5 distinct sentiment signals in the article:
-                              - Key events or announcements (e.g., "Company X launches new product")
-                              - Financial implications (e.g., "Revenue increase of 20%")
-                              - Market impacts (e.g., "Market share gains")
-                              - Strategic moves (e.g., "Partnership with competitor")
-                              - Competitive dynamics (e.g., "Price war intensifies")
-                              - Supply chain effects (e.g., "Supplier delays production")
-                              - Regulatory changes (e.g., "New regulations affect industry")
-                              - Technology developments (e.g., "Breakthrough in chip technology")
-                           d. Extract EXACTLY 3-5 distinct sentiment tokens - each representing a DIFFERENT aspect
-                           e. Add ALL 3-5 sentiment_tokens to THIS article (MANDATORY: minimum 3, maximum 5)
-                        4. Return ALL entities with ALL news articles, each article containing EXACTLY 3-5 sentiment_tokens
+                        WORKFLOW (FOLLOW EXACTLY - DO NOT SKIP ANY STEP):
+                        1. COUNT the number of entities in the input - remember this number
+                        2. Process ALL entities in the input - DO NOT skip any
+                        3. For EACH entity:
+                           a. COUNT the number of news articles for this entity - remember this number
+                           b. Process ALL news articles for this entity - DO NOT skip any
+                           c. For EACH news article:
+                              i. MANDATORY: Use fetch_article_content(url) to get the FULL article text - DO NOT skip this step
+                              ii. Read and analyze the ENTIRE article content carefully - look for multiple signals
+                              iii. Identify EXACTLY 5 distinct sentiment signals in the article:
+                                  - Key events or announcements (e.g., "Company X launches new product")
+                                  - Financial implications (e.g., "Revenue increase of 20%")
+                                  - Market impacts (e.g., "Market share gains")
+                                  - Strategic moves (e.g., "Partnership with competitor")
+                                  - Competitive dynamics (e.g., "Price war intensifies")
+                                  - Supply chain effects (e.g., "Supplier delays production")
+                                  - Regulatory changes (e.g., "New regulations affect industry")
+                                  - Technology developments (e.g., "Breakthrough in chip technology")
+                              iv. Extract EXACTLY 5 distinct sentiment tokens - each representing a DIFFERENT aspect
+                              v. Add ALL 5 sentiment_tokens to THIS article (MANDATORY: exactly 5)
+                        4. VERIFY your output:
+                           - Same number of entities as input
+                           - For each entity, same number of articles as input
+                           - Each article has exactly 5 sentiment_tokens
+                        5. Return ALL entities with ALL news articles, each article containing EXACTLY 5 sentiment_tokens
                         
                         ⚠️ MANDATORY RULES (SYSTEM WILL FAIL IF NOT FOLLOWED):
-                        - Extract EXACTLY 3-5 sentiment tokens per article (MINIMUM 3, MAXIMUM 5)
+                        - Process ALL entities from input - output must have same entity count
+                        - Process ALL articles for each entity - output must have same article count per entity
+                        - Extract EXACTLY 5 sentiment tokens per article (MINIMUM 5, MAXIMUM 5)
                         - Each token MUST represent a DIFFERENT aspect, event, or signal from the article
                         - You MUST use fetch_article_content() to read the full article - do not analyze just the title
                         - Sentiment tokens MUST be extracted from the specific article they belong to
                         - Do NOT aggregate tokens at the entity level - tokens belong to individual articles
-                        - If an article seems to have limited signals, dig deeper and find 3-5 different angles:
+                        - If an article seems to have limited signals, dig deeper and find 5 different angles:
                           * Direct impact on main company
                           * Indirect market effects
                           * Competitive positioning
                           * Supply chain implications
                           * Financial consequences
+                          * Technology implications
+                          * Regulatory effects
                         - Preserve all article fields: url, title, source, published_date
+                        - Preserve all entity fields: entity_name, relationship_strength, relationship_type
                         
                         For each sentiment token, provide:
                         - token_text (or tokenText): A specific, distinct key phrase or event from the news article
@@ -113,7 +136,7 @@ sentiment_analysis_agent_config = {
                         - direction: 'bullish', 'bearish', or 'neutral' (trading signal)
                         - strength: 0.0 to 1.0 (confidence in the signal)
                         
-                        EXAMPLE OUTPUT STRUCTURE (note EXACTLY 4 tokens per article - this is what you MUST produce):
+                        EXAMPLE OUTPUT STRUCTURE (note EXACTLY 5 tokens per article - this is what you MUST produce):
                         {
                           "company_name": "Apple",
                           "entities": [
@@ -131,7 +154,8 @@ sentiment_analysis_agent_config = {
                                     {"token_text": "TSMC factory expansion increases production capacity by 30%", "impact": "positive", "direction": "bullish", "strength": 0.8},
                                     {"token_text": "New factory reduces Apple supply chain risk", "impact": "positive", "direction": "bullish", "strength": 0.7},
                                     {"token_text": "Expansion costs may lead to 5% higher chip prices", "impact": "negative", "direction": "bearish", "strength": 0.6},
-                                    {"token_text": "Increased capacity enables faster iPhone production cycles", "impact": "positive", "direction": "bullish", "strength": 0.75}
+                                    {"token_text": "Increased capacity enables faster iPhone production cycles", "impact": "positive", "direction": "bullish", "strength": 0.75},
+                                    {"token_text": "New facility strengthens TSMC's market dominance", "impact": "neutral", "direction": "neutral", "strength": 0.65}
                                   ]
                                 }
                               ]
@@ -139,6 +163,8 @@ sentiment_analysis_agent_config = {
                           ]
                         }
                         
-                        REMEMBER: The schema REQUIRES minimum 3 tokens per article. Your output will be rejected if you provide fewer than 3 tokens for any article.""",
+                        REMEMBER: 
+                        - The schema REQUIRES minimum 5 tokens per article. Your output will be rejected if you provide fewer than 5 tokens for any article.
+                        - You MUST process ALL entities and ALL articles from the input. Your output will be rejected if entity or article counts don't match.""",
     "output_type": SentimentAnalysisOutput
 }

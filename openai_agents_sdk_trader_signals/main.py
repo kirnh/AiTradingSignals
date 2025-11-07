@@ -10,7 +10,7 @@ from prompts import (
     news_aggregation_agent_config,
     sentiment_analysis_agent_config
 )
-from schemas import EntityEnrichmentOutput, NewsAggregationOutput, SentimentAnalysisOutput
+from schemas import EntityEnrichmentOutput, NewsAggregationOutput, SentimentAnalysisOutput, RelatedEntity
 
 # Load environment variables from .env file
 load_dotenv()
@@ -90,6 +90,15 @@ async def run_trading_signal_pipeline(company_name: str):
     
     # Get the structured output (automatically parsed and validated!)
     enrichment_data = enrichment_result.final_output_as(EntityEnrichmentOutput)
+
+    # Add self company entity to the output
+    try:
+        enrichment_data.entities.append(RelatedEntity(entity_name=company_name, relationship_strength=1.0, relationship_type="self"))
+    except Exception as e:
+        logger.error(f"Failed to add self company entity to output: {e}", exc_info=True)
+        print(f"⚠️  Warning: Failed to add self company entity to output: {e}")
+        raise
+    
     logger.info(f"✓ Found {len(enrichment_data.entities)} related entities")
     
     # Save Step 1 output
@@ -180,6 +189,7 @@ async def run_trading_signal_pipeline(company_name: str):
     print(f"✓ Aggregated {total_articles} news articles across {len(news_data.entities)} entities")
     
     # Step 3: Sentiment Analysis (returns SentimentAnalysisOutput)
+    # Process entities in batches to avoid token limits, with parallel processing for speed
     logger.info("-"*60)
     logger.info("STEP 3: Sentiment Analysis - Starting...")
     logger.debug(f"Agent: {sentiment_analysis_agent.name}")
@@ -188,15 +198,151 @@ async def run_trading_signal_pipeline(company_name: str):
     
     print("\n" + "-"*60)
     print("Step 3: Sentiment Analysis - Analyzing sentiment signals...")
+    print(f"Processing {len(news_data.entities)} entities in parallel batches...")
     
-    sentiment_result = await runner.run(
-        sentiment_analysis_agent,
-        input=news_data.model_dump_json()
+    # Process entities in batches of 2 to avoid token limits
+    BATCH_SIZE = 2
+    MAX_CONCURRENT_BATCHES = 3  # Process up to 3 batches in parallel to avoid rate limits
+    total_entities = len(news_data.entities)
+    total_batches = (total_entities + BATCH_SIZE - 1) // BATCH_SIZE
+    
+    async def process_batch(batch_num: int, batch_entities: list, batch_start: int, batch_end: int):
+        """Process a single batch of entities and return the sentiment data."""
+        logger.info(f"Processing batch {batch_num}/{total_batches}: entities {batch_start+1}-{batch_end} of {total_entities}")
+        print(f"  Batch {batch_num}/{total_batches}: Processing {len(batch_entities)} entities...")
+        
+        # Create a batch input with just these entities
+        batch_input = NewsAggregationOutput(
+            company_name=news_data.company_name,
+            entities=batch_entities
+        )
+        
+        try:
+            sentiment_result = await runner.run(
+                sentiment_analysis_agent,
+                input=batch_input.model_dump_json()
+            )
+            logger.debug(f"Batch {batch_num} sentiment analysis completed")
+            
+            # Get the structured output for this batch
+            batch_sentiment_data = sentiment_result.final_output_as(SentimentAnalysisOutput)
+            
+            batch_articles = sum(len(e.news) for e in batch_sentiment_data.entities)
+            batch_tokens = sum(
+                len(article.sentiment_tokens)
+                for entity in batch_sentiment_data.entities
+                for article in entity.news
+            )
+            logger.info(f"✓ Batch {batch_num}: Processed {batch_articles} articles, generated {batch_tokens} tokens")
+            print(f"    ✓ Batch {batch_num}: {batch_articles} articles, {batch_tokens} tokens")
+            
+            return batch_sentiment_data.entities, batch_num
+            
+        except Exception as e:
+            logger.error(f"Failed to process batch {batch_num}: {e}", exc_info=True)
+            logger.error(f"Batch entities: {[e.entity_name for e in batch_entities]}")
+            print(f"  ⚠️  ERROR in batch {batch_num}: {e}")
+            return None, batch_num
+    
+    # Create all batch tasks
+    batch_tasks = []
+    for batch_start in range(0, total_entities, BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, total_entities)
+        batch_entities = news_data.entities[batch_start:batch_end]
+        batch_num = (batch_start // BATCH_SIZE) + 1
+        
+        batch_tasks.append(
+            process_batch(batch_num, batch_entities, batch_start, batch_end)
+        )
+    
+    # Process batches in parallel with concurrency limit
+    all_sentiment_entities_dict = {}  # Use dict to deduplicate and maintain order
+    completed_batches = set()
+    
+    # Process batches in chunks to respect concurrency limit
+    for i in range(0, len(batch_tasks), MAX_CONCURRENT_BATCHES):
+        chunk = batch_tasks[i:i + MAX_CONCURRENT_BATCHES]
+        chunk_batch_nums = [j + 1 for j in range(i, min(i + MAX_CONCURRENT_BATCHES, len(batch_tasks)))]
+        logger.info(f"Processing batches {chunk_batch_nums} in parallel...")
+        
+        results = await asyncio.gather(*chunk, return_exceptions=True)
+        
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Batch task failed with exception: {result}", exc_info=True)
+                continue
+            
+            entities, batch_num = result
+            if entities is not None:
+                # Store entities by name to maintain order and avoid duplicates
+                for entity in entities:
+                    all_sentiment_entities_dict[entity.entity_name] = entity
+                completed_batches.add(batch_num)
+    
+    # Maintain original entity order from input
+    ordered_entities = []
+    for entity in news_data.entities:
+        if entity.entity_name in all_sentiment_entities_dict:
+            ordered_entities.append(all_sentiment_entities_dict[entity.entity_name])
+    
+    sentiment_data = SentimentAnalysisOutput(
+        company_name=news_data.company_name,
+        entities=ordered_entities
     )
-    logger.debug("Sentiment analysis agent completed")
     
-    # Get the structured output
-    sentiment_data = sentiment_result.final_output_as(SentimentAnalysisOutput)
+    logger.info(f"✓ Completed sentiment analysis for {len(completed_batches)}/{total_batches} batches")
+    print(f"✓ Completed {len(completed_batches)}/{total_batches} batches")
+    
+    # Validate that all entities and articles were processed
+    input_entity_count = len(news_data.entities)
+    output_entity_count = len(sentiment_data.entities)
+    
+    print(f"\n📊 Step 3 Validation:")
+    print(f"  Input entities: {input_entity_count}")
+    print(f"  Output entities: {output_entity_count}")
+    
+    if input_entity_count != output_entity_count:
+        missing_entities = set(e.entity_name for e in news_data.entities) - set(e.entity_name for e in sentiment_data.entities)
+        logger.error(f"🚨 CRITICAL: Step 3 processed {output_entity_count} entities, but input had {input_entity_count} entities!")
+        logger.error(f"Missing entities: {missing_entities}")
+        print(f"  ⚠️  WARNING: Only processed {output_entity_count}/{input_entity_count} entities!")
+        print(f"  Missing: {', '.join(missing_entities)}")
+    else:
+        print(f"  ✓ All {input_entity_count} entities processed")
+    
+    # Check article counts per entity
+    total_input_articles = 0
+    total_output_articles = 0
+    missing_articles = []
+    
+    for input_entity in news_data.entities:
+        output_entity = next((e for e in sentiment_data.entities if e.entity_name == input_entity.entity_name), None)
+        input_article_count = len(input_entity.news)
+        total_input_articles += input_article_count
+        
+        if output_entity:
+            output_article_count = len(output_entity.news)
+            total_output_articles += output_article_count
+            if input_article_count != output_article_count:
+                missing_count = input_article_count - output_article_count
+                logger.warning(f"⚠️ Entity '{input_entity.entity_name}': Processed {output_article_count}/{input_article_count} articles")
+                missing_articles.append(f"{input_entity.entity_name}: {missing_count} missing")
+        else:
+            logger.error(f"🚨 Entity '{input_entity.entity_name}' is MISSING from Step 3 output!")
+            missing_articles.append(f"{input_entity.entity_name}: ALL articles missing")
+    
+    print(f"  Input articles: {total_input_articles}")
+    print(f"  Output articles: {total_output_articles}")
+    
+    if total_input_articles != total_output_articles:
+        print(f"  ⚠️  WARNING: Only processed {total_output_articles}/{total_input_articles} articles!")
+        if missing_articles:
+            print(f"  Missing articles in: {', '.join(missing_articles[:5])}")
+            if len(missing_articles) > 5:
+                print(f"  ... and {len(missing_articles) - 5} more entities with missing articles")
+    else:
+        print(f"  ✓ All {total_input_articles} articles processed")
+    
     # Count tokens across all articles in all entities
     total_tokens = sum(
         len(article.sentiment_tokens)
