@@ -14,6 +14,9 @@ import json
 import uuid
 import asyncio
 import logging
+import time
+import httpx
+from starlette.middleware.base import BaseHTTPMiddleware
 from utils import get_entity_news_from_api, get_entity_news_from_gnews
 
 # Set up logging
@@ -21,10 +24,180 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Timeout middleware to track request processing time
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        start_time = time.time()
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+        
+        # Log request start
+        logger.info(f"[{request_id}] {request.method} {request.url.path} - START")
+        
+        try:
+            response = await call_next(request)
+            process_time = time.time() - start_time
+            response.headers["X-Process-Time"] = str(round(process_time, 3))
+            response.headers["X-Request-ID"] = request_id
+            
+            # Log completion
+            logger.info(f"[{request_id}] {request.method} {request.url.path} - COMPLETE in {process_time:.3f}s (Status: {response.status_code})")
+            
+            # Warn if request took too long
+            if process_time > 10:
+                logger.warning(f"[{request_id}] SLOW REQUEST: {process_time:.3f}s")
+            if process_time > 30:
+                logger.error(f"[{request_id}] VERY SLOW REQUEST: {process_time:.3f}s - May timeout!")
+            
+            return response
+        except asyncio.TimeoutError as e:
+            process_time = time.time() - start_time
+            logger.error(f"[{request_id}] TIMEOUT after {process_time:.3f}s: {e}")
+            raise
+        except Exception as e:
+            process_time = time.time() - start_time
+            logger.error(f"[{request_id}] ERROR after {process_time:.3f}s: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"[{request_id}] Traceback: {traceback.format_exc()}")
+            raise
+
+
 def _get_entity_news(entity_name: str) -> List[Dict[str, Any]]:
-    """Helper function to fetch news from all sources."""
+    """Helper function to fetch news from all sources (synchronous)."""
+    start_time = time.time()
     list1 = get_entity_news_from_api(entity_name)
+    api_time = time.time() - start_time
+    logger.info(f"NewsAPI call took {api_time:.3f}s")
+    
+    start_time = time.time()
     list2 = get_entity_news_from_gnews(entity_name)
+    gnews_time = time.time() - start_time
+    logger.info(f"GNews call took {gnews_time:.3f}s")
+    
+    total_time = api_time + gnews_time
+    logger.info(f"Total news fetch took {total_time:.3f}s")
+    return list1 + list2
+
+
+async def _get_entity_news_async(entity_name: str) -> List[Dict[str, Any]]:
+    """Async helper function to fetch news from all sources in parallel (faster)."""
+    start_time = time.time()
+    logger.info(f"Starting async news fetch for: {entity_name}")
+    
+    async def fetch_newsapi():
+        """Fetch from NewsAPI"""
+        api_start = time.time()
+        try:
+            logger.info(f"Fetching from NewsAPI for: {entity_name}")
+            API_KEY = "48c51ab301094753bb46f899b6b5a103"
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'q': entity_name,
+                'sortBy': 'publishedAt',
+                'language': 'en',
+                'pageSize': 10,
+                'apiKey': API_KEY
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get('status') != 'ok':
+                    logger.warning(f"NewsAPI Error: {data.get('message', 'Unknown error')}")
+                    return []
+                
+                articles = []
+                for article in data.get('articles', []):
+                    articles.append({
+                        'title': article.get('title', ''),
+                        'url': article.get('url', ''),
+                        'source': article.get('source', {}).get('name', ''),
+                        'description': article.get('description'),
+                        'published_at': article.get('publishedAt'),
+                        'image': article.get('urlToImage')
+                    })
+                api_time = time.time() - api_start
+                logger.info(f"NewsAPI completed in {api_time:.3f}s, returned {len(articles)} articles")
+                return articles
+        except asyncio.TimeoutError as e:
+            api_time = time.time() - api_start
+            logger.error(f"NewsAPI TIMEOUT after {api_time:.3f}s: {e}")
+            return []
+        except Exception as e:
+            api_time = time.time() - api_start
+            logger.error(f"Error fetching from NewsAPI after {api_time:.3f}s: {type(e).__name__}: {e}")
+            return []
+    
+    async def fetch_gnews():
+        """Fetch from GNews"""
+        gnews_start = time.time()
+        try:
+            logger.info(f"Fetching from GNews for: {entity_name}")
+            url = "https://gnews.io/api/v4/search"
+            params = {
+                'q': entity_name,
+                'lang': 'en',
+                'max': 10,
+                'apikey': 'db2651be6ce35c4956fbe1fc2a5a8cdb'  # GNews API key
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                # GNews returns articles directly in the response
+                articles = []
+                for article in data.get('articles', []):
+                    articles.append({
+                        'title': article.get('title', ''),
+                        'url': article.get('url', ''),
+                        'source': article.get('source', {}).get('name', '') if isinstance(article.get('source'), dict) else article.get('source', ''),
+                        'description': article.get('description'),
+                        'published_at': article.get('publishedAt'),
+                        'image': article.get('image')
+                    })
+                gnews_time = time.time() - gnews_start
+                logger.info(f"GNews completed in {gnews_time:.3f}s, returned {len(articles)} articles")
+                return articles
+        except asyncio.TimeoutError as e:
+            gnews_time = time.time() - gnews_start
+            logger.error(f"GNews TIMEOUT after {gnews_time:.3f}s: {e}")
+            return []
+        except Exception as e:
+            gnews_time = time.time() - gnews_start
+            logger.error(f"Error fetching from GNews after {gnews_time:.3f}s: {type(e).__name__}: {e}")
+            return []
+    
+    # Run both API calls in parallel with timeout
+    try:
+        list1, list2 = await asyncio.wait_for(
+            asyncio.gather(
+                fetch_newsapi(),
+                fetch_gnews(),
+                return_exceptions=True
+            ),
+            timeout=60.0  # Total timeout for both calls
+        )
+    except asyncio.TimeoutError:
+        total_time = time.time() - start_time
+        logger.error(f"TOTAL TIMEOUT after {total_time:.3f}s - Both API calls exceeded 60s")
+        return []
+    
+    # Handle exceptions
+    if isinstance(list1, Exception):
+        logger.error(f"NewsAPI exception: {list1}")
+        list1 = []
+    if isinstance(list2, Exception):
+        logger.error(f"GNews exception: {list2}")
+        list2 = []
+    
+    total_time = time.time() - start_time
+    total_articles = len(list1) + len(list2)
+    logger.info(f"Async news fetch COMPLETE: {total_time:.3f}s (parallel) - {total_articles} total articles")
+    
+    if total_time > 30:
+        logger.warning(f"SLOW: News fetch took {total_time:.3f}s - may cause client timeout")
+    
     return list1 + list2
 
 
@@ -64,6 +237,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add timeout middleware
+app.add_middleware(TimeoutMiddleware)
 
 
 # Request/Response models
@@ -118,6 +294,42 @@ async def health():
     return {"status": "healthy"}
 
 
+@app.get("/metrics")
+async def metrics():
+    """Monitoring endpoint to check server status and recent performance"""
+    try:
+        import psutil
+        import os
+    except ImportError:
+        return {
+            "status": "running",
+            "error": "psutil not installed - install with: uv add psutil",
+            "timeouts": {
+                "uvicorn_keep_alive": 300,
+                "api_timeout": 30,
+                "total_fetch_timeout": 60,
+            },
+            "timestamp": time.time()
+        }
+    
+    process = psutil.Process(os.getpid())
+    
+    return {
+        "status": "running",
+        "server": {
+            "uptime_seconds": time.time() - process.create_time(),
+            "memory_mb": round(process.memory_info().rss / 1024 / 1024, 2),
+            "cpu_percent": process.cpu_percent(interval=0.1),
+        },
+        "timeouts": {
+            "uvicorn_keep_alive": 300,
+            "api_timeout": 30,
+            "total_fetch_timeout": 60,
+        },
+        "timestamp": time.time()
+    }
+
+
 @app.post("/debug")
 async def debug_endpoint(request: Request):
     """Debug endpoint to see what requests are being sent"""
@@ -146,12 +358,13 @@ async def get_entity_news_tool(request: ToolRequest):
     This endpoint wraps the MCP tool and exposes it via HTTP
     """
     try:
-        result = _get_entity_news(request.entity_name)
+        result = await _get_entity_news_async(request.entity_name)
         return ToolResponse(
             success=True,
             data=result
         )
     except Exception as e:
+        logger.error(f"Error in get_entity_news_tool: {e}")
         return ToolResponse(
             success=False,
             data=[],
@@ -197,13 +410,13 @@ async def mcp_tool_call(request: Dict[str, Any]):
             if not entity_name:
                 raise HTTPException(status_code=400, detail="entity_name is required")
             
-            result = _get_entity_news(entity_name)
+            result = await _get_entity_news_async(entity_name)
             
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": str(result)
+                        "text": json.dumps(result, indent=2)
                     }
                 ]
             }
@@ -286,7 +499,7 @@ async def mcp_jsonrpc(request: Request):
                     }
                 
                 try:
-                    result = _get_entity_news(entity_name)
+                    result = await _get_entity_news_async(entity_name)
                     
                     return {
                         "jsonrpc": "2.0",
@@ -551,12 +764,16 @@ async def mcp_jsonrpc_v1(request: Request):
 
 
 if __name__ == "__main__":
-    # Run the server
+    # Run the server with increased timeouts
     uvicorn.run(
         "http_server:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        timeout_keep_alive=300,  # Keep connections alive for 5 minutes
+        timeout_graceful_shutdown=30,  # Graceful shutdown timeout
+        limit_concurrency=100,  # Max concurrent connections
+        limit_max_requests=1000,  # Max requests before restart
     )
 

@@ -28,7 +28,7 @@ def get_entity_news_from_api(entity_name: str, num_results: int = 10) -> list:
     }
     
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=30)  # Increased from 10 to 30 seconds
         response.raise_for_status()
         data = response.json()
         
@@ -77,7 +77,7 @@ def get_entity_news_from_gnews(entity_name: str, num_results: int = 10) -> list:
     }
     
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=30)  # Increased from 10 to 30 seconds
         response.raise_for_status()
         data = response.json()
         
