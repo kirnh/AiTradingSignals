@@ -1,0 +1,70 @@
+AI Trading Signals - Multi-Agent Pipeline
+Agents:
+  1. Entity Enrichment Agent - Finds related entities (uses web browsing)
+  2. News Aggregation Agent - Fetches news articles
+  3. Sentiment Analysis Agent - Analyzes sentiment signals
+
+
+============================================================
+Starting Trading Signal Analysis for: Apple
+============================================================
+
+Step 1: Entity Enrichment - Finding related entities...
+✓ Found 10 related entities
+  - Samsung Electronics (competitor, strength: 0.9)
+  - Microsoft (competitor, strength: 0.8)
+  - Foxconn Technology Group (supplier, strength: 0.8)
+  - Pegatron (supplier, strength: 0.7)
+  - Tim Cook (executive, strength: 1.0)
+  - Luca Maestri (executive, strength: 1.0)
+  - Sony (supplier, strength: 0.6)
+  - Qualcomm (supplier, strength: 0.7)
+  - Berkshire Hathaway (investor, strength: 0.9)
+  - Jony Ive (partner, strength: 0.6)
+
+------------------------------------------------------------
+Step 2: News Aggregation - Fetching news for entities...
+  Entities: Samsung Electronics, Microsoft, Foxconn Technology Group, Pegatron, Tim Cook, ...
+  Expected: 10 tool calls
+  → Tool call #1: Fetching news for 'Samsung Electronics' using gnews
+  → Tool call #2: Fetching news for 'Microsoft' using gnews
+  → Tool call #3: Fetching news for 'Foxconn Technology Group' using gnews
+  → Tool call #4: Fetching news for 'Pegatron' using gnews
+  → Tool call #5: Fetching news for 'Tim Cook' using gnews
+  → Tool call #6: Fetching news for 'Luca Maestri' using gnews
+  → Tool call #7: Fetching news for 'Sony' using gnews
+  → Tool call #8: Fetching news for 'Qualcomm' using gnews
+  → Tool call #9: Fetching news for 'Berkshire Hathaway' using gnews
+  → Tool call #10: Fetching news for 'Jony Ive' using gnews
+✓ Saved Step 2 output to: step2_news_aggregation_apple.json
+
+  Tool calls: 10 / 10 expected
+✓ Aggregated 100 news articles across 10 entities
+
+------------------------------------------------------------
+Step 3: Sentiment Analysis - Analyzing sentiment signals...
+  → Tool call #1: Fetching article content
+  → Tool call #2: Fetching article content
+  → Tool call #3: Fetching article content
+  → Tool call #4: Fetching article content
+  → Tool call #5: Fetching article content
+✓ Generated 25 sentiment tokens across all articles
+
+  Samsung Electronics - Samsung is in advanced talks with Barclays to launch a consu...
+    • Samsung expanding financial services with new credit card launch
+      Impact: neutral, Direction: neutral, Strength: 0.6
+    • Partnership with Barclays indicates strategic expansion in U.S. market
+      Impact: negative, Direction: bearish, Strength: 0.75
+
+  Samsung Electronics - Samsung, Mercedes chiefs set to meet next week in South Kore...
+    • Samsung collaborating with Mercedes on EV batteries
+      Impact: negative, Direction: bearish, Strength: 0.8
+    • Discussion on semiconductors hints at supply chain strengthening
+      Impact: negative, Direction: neutral, Strength: 0.65
+
+============================================================
+Pipeline Complete!
+============================================================
+
+  Total entities analyzed: 1
+  Total sentiment signals: 25 (across all articles)

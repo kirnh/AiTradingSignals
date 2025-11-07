@@ -31,8 +31,8 @@ class EntityEnrichmentOutput(BaseModel):
 
 
 # News Aggregation Agent Output Schema
-class NewsArticle(BaseModel):
-    """A single news article."""
+class NewsArticleBasic(BaseModel):
+    """A single news article (without sentiment analysis - used in Step 2)."""
     url: str = Field(description="URL of the news article")
     published_date: str = Field(description="Publication date in ISO format")
     source: str = Field(description="Source of the news (e.g., 'Reuters', 'Bloomberg')")
@@ -44,7 +44,7 @@ class EntityWithNews(BaseModel):
     entity_name: str = Field(description="Name of the entity")
     relationship_strength: float = Field(ge=0.0, le=1.0)
     relationship_type: str
-    news: List[NewsArticle] = Field(description="List of news articles about this entity")
+    news: List[NewsArticleBasic] = Field(description="List of news articles about this entity")
 
 
 class NewsAggregationOutput(BaseModel):
@@ -77,14 +77,26 @@ class SentimentToken(BaseModel):
     )
 
 
+class NewsArticle(BaseModel):
+    """A single news article with sentiment analysis (used in Step 3)."""
+    url: str = Field(description="URL of the news article")
+    published_date: str = Field(description="Publication date in ISO format")
+    source: str = Field(description="Source of the news (e.g., 'Reuters', 'Bloomberg')")
+    title: str = Field(description="Title of the article", default="")
+    sentiment_tokens: List[SentimentToken] = Field(
+        description="List of sentiment signals extracted from this article. MUST contain atleast 5 distinct sentiment tokens per article. Each token should represent a different aspect, event, or implication from the article.",
+        min_length=5,
+        max_length=15
+    )
+
+
 class EntityWithSentiment(BaseModel):
-    """An entity with news and sentiment analysis."""
+    """An entity with news articles, each containing sentiment analysis."""
     entity_name: str
     relationship_strength: float = Field(ge=0.0, le=1.0)
     relationship_type: str
-    news: List[NewsArticle]
-    sentiment_tokens: List[SentimentToken] = Field(
-        description="List of sentiment signals extracted from news"
+    news: List[NewsArticle] = Field(
+        description="List of news articles, each with its own sentiment tokens"
     )
 
 
@@ -122,7 +134,7 @@ if __name__ == "__main__":
     print("✓ EntityEnrichmentOutput validated")
     print(json.dumps(enrichment_output.model_dump(), indent=2))
     
-    # Test NewsAggregationOutput
+    # Test NewsAggregationOutput (Step 2 - no sentiment_tokens)
     news_data = {
         "company_name": "Apple",
         "entities": [
@@ -146,7 +158,7 @@ if __name__ == "__main__":
     print("\n✓ NewsAggregationOutput validated")
     print(json.dumps(news_output.model_dump(), indent=2))
     
-    # Test SentimentAnalysisOutput
+    # Test SentimentAnalysisOutput (Step 3 - with MULTIPLE sentiment_tokens per article, minimum 3)
     sentiment_data = {
         "company_name": "Apple",
         "entities": [
@@ -159,15 +171,27 @@ if __name__ == "__main__":
                         "url": "https://example.com/article",
                         "published_date": "2024-11-07",
                         "source": "Reuters",
-                        "title": "TSMC expands"
-                    }
-                ],
-                "sentiment_tokens": [
-                    {
-                        "tokenText": "TSMC expands production capacity",
-                        "impact": "positive",
-                        "direction": "bullish",
-                        "strength": 0.75
+                        "title": "TSMC expands",
+                        "sentiment_tokens": [
+                            {
+                                "tokenText": "TSMC expands production capacity by 30%",
+                                "impact": "positive",
+                                "direction": "bullish",
+                                "strength": 0.75
+                            },
+                            {
+                                "tokenText": "Increased capacity reduces Apple supply chain risk",
+                                "impact": "positive",
+                                "direction": "bullish",
+                                "strength": 0.7
+                            },
+                            {
+                                "tokenText": "Expansion costs may lead to 5% higher chip prices",
+                                "impact": "negative",
+                                "direction": "bearish",
+                                "strength": 0.6
+                            }
+                        ]
                     }
                 ]
             }

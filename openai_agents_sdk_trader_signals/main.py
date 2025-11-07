@@ -136,9 +136,14 @@ async def run_trading_signal_pipeline(company_name: str):
     
     # Save Step 2 output
     step2_file = f"step2_news_aggregation_{company_name.lower().replace(' ', '_')}.json"
-    with open(step2_file, 'w') as f:
-        json.dump(news_data.model_dump(), f, indent=2)
-    logger.info(f"✓ Saved Step 2 output to: {step2_file}")
+    try:
+        with open(step2_file, 'w') as f:
+            json.dump(news_data.model_dump(), f, indent=2)
+        logger.info(f"✓ Saved Step 2 output to: {step2_file}")
+        print(f"✓ Saved Step 2 output to: {step2_file}")
+    except Exception as e:
+        logger.error(f"Failed to save Step 2 output: {e}", exc_info=True)
+        print(f"⚠️  Warning: Failed to save Step 2 output: {e}")
     
     for entity in news_data.entities:
         logger.debug(f"Entity '{entity.entity_name}': {len(entity.news)} articles found")
@@ -192,8 +197,13 @@ async def run_trading_signal_pipeline(company_name: str):
     
     # Get the structured output
     sentiment_data = sentiment_result.final_output_as(SentimentAnalysisOutput)
-    total_tokens = sum(len(entity.sentiment_tokens) for entity in sentiment_data.entities)
-    logger.info(f"✓ Generated {total_tokens} sentiment tokens")
+    # Count tokens across all articles in all entities
+    total_tokens = sum(
+        len(article.sentiment_tokens)
+        for entity in sentiment_data.entities
+        for article in entity.news
+    )
+    logger.info(f"✓ Generated {total_tokens} sentiment tokens across all articles")
     
     # Save Step 3 output
     step3_file = f"step3_sentiment_analysis_{company_name.lower().replace(' ', '_')}.json"
@@ -207,22 +217,33 @@ async def run_trading_signal_pipeline(company_name: str):
     if missing_entities_step3:
         logger.warning(f"⚠️ Missing entities in Step 3: {missing_entities_step3}")
     
-    # Log token distribution
+    # Log token distribution per entity and article
     for entity in sentiment_data.entities:
-        logger.debug(f"Entity '{entity.entity_name}': {len(entity.sentiment_tokens)} sentiment tokens")
+        entity_token_count = sum(len(article.sentiment_tokens) for article in entity.news)
+        logger.debug(f"Entity '{entity.entity_name}': {entity_token_count} sentiment tokens across {len(entity.news)} articles")
+        for article in entity.news:
+            if article.sentiment_tokens:
+                logger.debug(f"  Article '{article.title[:50]}...': {len(article.sentiment_tokens)} tokens")
     
-    print(f"✓ Generated {total_tokens} sentiment tokens")
+    print(f"✓ Generated {total_tokens} sentiment tokens across all articles")
     
     # Show sample sentiment tokens
     logger.debug("Sample sentiment tokens:")
-    for entity in sentiment_data.entities[:2]:
-        if entity.sentiment_tokens:
-            print(f"\n  {entity.entity_name}:")
-            logger.debug(f"Entity: {entity.entity_name} - {len(entity.sentiment_tokens)} tokens")
-            for token in entity.sentiment_tokens[:2]:
-                print(f"    • {token.token_text}")
-                print(f"      Impact: {token.impact}, Direction: {token.direction}, Strength: {token.strength}")
-                logger.debug(f"  Token: {token.token_text} | {token.impact}/{token.direction} ({token.strength})")
+    shown_count = 0
+    for entity in sentiment_data.entities:
+        if shown_count >= 2:
+            break
+        for article in entity.news:
+            if article.sentiment_tokens and shown_count < 2:
+                print(f"\n  {entity.entity_name} - {article.title[:60]}...")
+                logger.debug(f"Entity: {entity.entity_name}, Article: {article.title[:50]}... - {len(article.sentiment_tokens)} tokens")
+                for token in article.sentiment_tokens[:2]:
+                    print(f"    • {token.token_text}")
+                    print(f"      Impact: {token.impact}, Direction: {token.direction}, Strength: {token.strength}")
+                    logger.debug(f"  Token: {token.token_text} | {token.impact}/{token.direction} ({token.strength})")
+                shown_count += 1
+                if shown_count >= 2:
+                    break
     
     print(f"\n{'='*60}")
     print("Pipeline Complete!")
@@ -242,7 +263,7 @@ async def run_trading_signal_pipeline(company_name: str):
         logger.warning(f"⚠️ Entity count mismatch: Step 2 ({len(news_data.entities)}) vs Step 3 ({len(sentiment_data.entities)})")
     
     logger.info(f"Total news articles: {total_articles}")
-    logger.info(f"Total sentiment tokens: {total_tokens}")
+    logger.info(f"Total sentiment tokens: {total_tokens} (across all articles)")
     
     # Print intermediate files saved
     logger.info("Intermediate outputs saved:")
@@ -307,23 +328,17 @@ async def main():
     
     result = await run_trading_signal_pipeline(company)
     
-    # Save results (result is now a validated SentimentAnalysisOutput object)
-    output_file = f"trading_signals_{company.lower().replace(' ', '_')}.json"
-    logger.info(f"Saving results to: {output_file}")
-    
-    with open(output_file, 'w') as f:
-        # Use model_dump() to convert Pydantic model to dict
-        json.dump(result.model_dump(), f, indent=2)
-    
-    logger.info(f"✓ Results saved successfully")
     logger.info(f"Total entities analyzed: {len(result.entities)}")
     
-    total_tokens = sum(len(e.sentiment_tokens) for e in result.entities)
-    logger.info(f"Total sentiment signals: {total_tokens}")
+    total_tokens = sum(
+        len(article.sentiment_tokens)
+        for entity in result.entities
+        for article in entity.news
+    )
+    logger.info(f"Total sentiment signals: {total_tokens} (across all articles)")
     
-    print(f"\n✓ Results saved to: {output_file}")
     print(f"  Total entities analyzed: {len(result.entities)}")
-    print(f"  Total sentiment signals: {total_tokens}")
+    print(f"  Total sentiment signals: {total_tokens} (across all articles)")
     
     logger.info("="*80)
     logger.info("APPLICATION END")
