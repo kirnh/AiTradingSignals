@@ -2,26 +2,66 @@ import os
 import json
 import asyncio
 import logging
+import re
+import time
 from dotenv import load_dotenv
 from agents import Agent, Runner
-from tools import get_entity_news, fetch_article_content, get_tool_call_count, reset_tool_call_counter
+from tools import get_entity_news, fetch_article_content, reset_tool_call_counter
 from prompts import (
     entity_enrichment_agent_config,
     news_aggregation_agent_config,
-    sentiment_analysis_agent_config
+    sentiment_analysis_agent_config,
+    single_entity_news_agent_config,
+    single_article_sentiment_agent_config
 )
-from schemas import EntityEnrichmentOutput, NewsAggregationOutput, SentimentAnalysisOutput, RelatedEntity
+from schemas import (
+    EntityEnrichmentOutput, 
+    NewsAggregationOutput, 
+    SentimentAnalysisOutput, 
+    RelatedEntity,
+    SingleEntityNewsOutput,
+    SingleArticleSentimentOutput,
+    EntityWithNews,
+    EntityWithSentiment,
+    NewsArticle,
+    NewsArticleBasic
+)
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Configure verbose logging
+# Configure logging with configurable log level
+def get_log_level():
+    """Get log level from environment variable, defaulting to INFO."""
+    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_levels = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    return log_levels.get(log_level_str, logging.INFO)
+
+log_level = get_log_level()
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# Log the configured log level
+log_level_name = logging.getLevelName(log_level)
+logger.info(f"Log level set to: {log_level_name} (from LOG_LEVEL env var: {os.getenv('LOG_LEVEL', 'INFO')})")
+
+# Concurrency limits for parallel processing
+MAX_CONCURRENT_NEWS_AGENTS = int(os.getenv("MAX_CONCURRENT_NEWS_AGENTS", "10"))
+MAX_CONCURRENT_SENTIMENT_AGENTS = int(os.getenv("MAX_CONCURRENT_SENTIMENT_AGENTS", "5"))  # Reduced default to avoid rate limits
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))  # Maximum retries for rate limit errors
+
+logger.info(f"Concurrency limits: News agents={MAX_CONCURRENT_NEWS_AGENTS}, Sentiment agents={MAX_CONCURRENT_SENTIMENT_AGENTS}")
+logger.info(f"Retry configuration: Max retries={MAX_RETRIES} for rate limit errors")
 
 
 # Create the three agents with their respective tools and structured outputs
@@ -50,6 +90,23 @@ sentiment_analysis_agent = Agent(
     output_type=sentiment_analysis_agent_config["output_type"]
 )
 
+# Create agents for parallel processing (one per entity/article)
+single_entity_news_agent = Agent(
+    name="Single Entity News Agent",
+    instructions=single_entity_news_agent_config["instructions"],
+    tools=[get_entity_news],
+    model="gpt-4o",
+    output_type=single_entity_news_agent_config["output_type"]
+)
+
+single_article_sentiment_agent = Agent(
+    name="Single Article Sentiment Agent",
+    instructions=single_article_sentiment_agent_config["instructions"],
+    tools=[fetch_article_content],
+    model="gpt-4o",
+    output_type=single_article_sentiment_agent_config["output_type"]
+)
+
 
 async def run_trading_signal_pipeline(company_name: str):
     """
@@ -64,6 +121,9 @@ async def run_trading_signal_pipeline(company_name: str):
     # Reset tool call counters at the start
     reset_tool_call_counter()
     
+    # Start overall pipeline timer
+    pipeline_start_time = time.perf_counter()
+    
     logger.info("="*60)
     logger.info(f"PIPELINE START: Trading Signal Analysis for {company_name}")
     logger.info("="*60)
@@ -73,6 +133,7 @@ async def run_trading_signal_pipeline(company_name: str):
     print(f"{'='*60}\n")
     
     # Step 1: Entity Enrichment (returns EntityEnrichmentOutput)
+    step1_start_time = time.perf_counter()
     logger.info("STEP 1: Entity Enrichment - Starting...")
     logger.debug(f"Input: {json.dumps({'company_name': company_name})}")
     print("Step 1: Entity Enrichment - Finding related entities...")
@@ -87,6 +148,8 @@ async def run_trading_signal_pipeline(company_name: str):
         input=json.dumps({"company_name": company_name})
     )
     logger.debug("Entity enrichment agent completed")
+    
+    step1_elapsed = time.perf_counter() - step1_start_time
     
     # Get the structured output (automatically parsed and validated!)
     enrichment_data = enrichment_result.final_output_as(EntityEnrichmentOutput)
@@ -115,33 +178,148 @@ async def run_trading_signal_pipeline(company_name: str):
     # Log all entities
     logger.info(f"All entities: {[e.entity_name for e in enrichment_data.entities]}")
     
-    # Step 2: News Aggregation (returns NewsAggregationOutput)
-    logger.info("-"*60)
-    logger.info("STEP 2: News Aggregation - Starting...")
-    logger.debug(f"Agent: {news_aggregation_agent.name}")
-    logger.debug(f"Agent tools: {[t.name for t in news_aggregation_agent.tools]}")
-    logger.debug(f"Processing {len(enrichment_data.entities)} entities")
+    # Log Step 1 timing
+    logger.info(f"⏱️  Step 1 completed in {step1_elapsed:.2f} seconds ({step1_elapsed/60:.2f} minutes)")
+    print(f"⏱️  Step 1 completed in {step1_elapsed:.2f} seconds")
     
-    # Log all entity names that should get news
+    # Step 2: News Aggregation (returns NewsAggregationOutput) - PARALLEL PROCESSING
+    step2_start_time = time.perf_counter()
+    logger.info("-"*60)
+    logger.info("STEP 2: News Aggregation - Starting parallel processing...")
+    logger.debug(f"Processing {len(enrichment_data.entities)} entities in parallel")
+    
     entity_names = [e.entity_name for e in enrichment_data.entities]
     logger.info(f"Entities to fetch news for: {entity_names}")
-    logger.info(f"⚠️  CRITICAL: Agent MUST call get_entity_news() {len(entity_names)} times (once per entity)")
+    logger.info(f"Processing {len(entity_names)} entities with max {MAX_CONCURRENT_NEWS_AGENTS} concurrent agents")
     
     print("\n" + "-"*60)
-    print("Step 2: News Aggregation - Fetching news for entities...")
-    print(f"  Entities: {', '.join(entity_names[:5])}{', ...' if len(entity_names) > 5 else ''}")
-    print(f"  Expected: {len(entity_names)} tool calls")
+    print("Step 2: News Aggregation - Fetching news in parallel...")
+    print(f"  Entities: {len(entity_names)} total")
+    print(f"  Concurrency: {MAX_CONCURRENT_NEWS_AGENTS} agents at a time")
     
-    news_result = await runner.run(
-        news_aggregation_agent,
-        input=enrichment_data.model_dump_json()
+    # Create semaphore to limit concurrent agents
+    news_semaphore = asyncio.Semaphore(MAX_CONCURRENT_NEWS_AGENTS)
+    
+    def extract_retry_after_news(error_message: str) -> float:
+        """Extract retry-after time from error message."""
+        match = re.search(r'(?:try again in|retry_after[:\s]+)(\d+\.?\d*)\s*s', error_message, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+        return None
+    
+    def is_rate_limit_error_news(error: Exception) -> bool:
+        """Check if error is a rate limit error."""
+        error_str = str(error)
+        return "429" in error_str or "rate_limit" in error_str.lower() or "rate limit" in error_str.lower()
+    
+    async def process_single_entity_news(entity: RelatedEntity, entity_index: int, total_entities: int):
+        """Process news for a single entity using a dedicated agent instance with retry logic."""
+        async with news_semaphore:
+            logger.info(f"Processing entity {entity_index + 1}/{total_entities}: {entity.entity_name}")
+            
+            # Create input for single entity
+            single_entity_input = {
+                "company_name": company_name,
+                "entity": {
+                    "entity_name": entity.entity_name,
+                    "relationship_strength": entity.relationship_strength,
+                    "relationship_type": entity.relationship_type
+                }
+            }
+            
+            # Retry logic with exponential backoff
+            last_error = None
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    runner = Runner()
+                    result = await runner.run(
+                        single_entity_news_agent,
+                        input=json.dumps(single_entity_input)
+                    )
+                    
+                    # Get structured output
+                    single_result = result.final_output_as(SingleEntityNewsOutput)
+                    logger.info(f"✓ Entity {entity_index + 1}/{total_entities} ({entity.entity_name}): {len(single_result.entity.news)} articles")
+                    
+                    return single_result.entity, entity_index
+                    
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    # Check if it's a rate limit error
+                    if is_rate_limit_error_news(e) and attempt < MAX_RETRIES:
+                        # Extract retry-after time from error message
+                        retry_after = extract_retry_after_news(error_str)
+                        
+                        if retry_after:
+                            wait_time = retry_after * 1.1
+                            logger.warning(f"Rate limit hit for entity {entity_index + 1} ({entity.entity_name}), waiting {wait_time:.2f}s before retry {attempt + 1}/{MAX_RETRIES}")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            wait_time = (2 ** attempt) + (attempt * 0.5)
+                            logger.warning(f"Rate limit hit for entity {entity_index + 1} ({entity.entity_name}), using exponential backoff: {wait_time:.2f}s (retry {attempt + 1}/{MAX_RETRIES})")
+                            await asyncio.sleep(wait_time)
+                    else:
+                        # Not a rate limit error or max retries reached
+                        break
+            
+            # All retries failed or non-rate-limit error
+            logger.error(f"Failed to process entity {entity_index + 1} ({entity.entity_name}) after {MAX_RETRIES + 1} attempts: {last_error}", exc_info=True)
+            print(f"  ⚠️  ERROR processing {entity.entity_name}: {last_error}")
+            
+            # Return entity with empty news on error
+            error_entity = EntityWithNews(
+                entity_name=entity.entity_name,
+                relationship_strength=entity.relationship_strength,
+                relationship_type=entity.relationship_type,
+                news=[]
+            )
+            return error_entity, entity_index
+    
+    # Create tasks for all entities
+    entity_tasks = [
+        process_single_entity_news(entity, idx, len(enrichment_data.entities))
+        for idx, entity in enumerate(enrichment_data.entities)
+    ]
+    
+    # Process all entities in parallel with concurrency limit
+    logger.info(f"Launching {len(entity_tasks)} parallel news aggregation agents...")
+    results = await asyncio.gather(*entity_tasks, return_exceptions=True)
+    
+    # Aggregate results, maintaining order
+    entity_results = []
+    successful_count = 0
+    failed_count = 0
+    
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(f"Entity task failed with exception: {result}", exc_info=True)
+            failed_count += 1
+            continue
+        
+        entity_data, entity_index = result
+        if entity_data:
+            entity_results.append((entity_data, entity_index))
+            successful_count += 1
+    
+    # Sort by original index to maintain order
+    entity_results.sort(key=lambda x: x[1])
+    ordered_entities = [entity for entity, _ in entity_results]
+    
+    # Create aggregated output
+    news_data = NewsAggregationOutput(
+        company_name=company_name,
+        entities=ordered_entities
     )
-    logger.debug("News aggregation agent completed")
     
-    # Get the structured output
-    news_data = news_result.final_output_as(NewsAggregationOutput)
     total_articles = sum(len(entity.news) for entity in news_data.entities)
+    logger.info(f"✓ Completed parallel news aggregation: {successful_count} successful, {failed_count} failed")
     logger.info(f"✓ Aggregated {total_articles} news articles across {len(news_data.entities)} entities")
+    
+    print(f"  ✓ Processed {successful_count}/{len(enrichment_data.entities)} entities")
+    if failed_count > 0:
+        print(f"  ⚠️  {failed_count} entities failed")
     
     # Save Step 2 output
     step2_file = f"step2_news_aggregation_{company_name.lower().replace(' ', '_')}.json"
@@ -163,135 +341,218 @@ async def run_trading_signal_pipeline(company_name: str):
     missing_entities = step1_entities - step2_entities
     if missing_entities:
         logger.warning(f"⚠️ Missing entities in Step 2: {missing_entities}")
+        print(f"  ⚠️  Missing entities: {', '.join(missing_entities)}")
     
-    # Check tool call count
-    tool_calls = get_tool_call_count("get_entity_news")
-    expected_calls = len(entity_names)
-    logger.info(f"Tool call summary: get_entity_news called {tool_calls} times (expected: {expected_calls})")
-    print(f"\n  Tool calls: {tool_calls} / {expected_calls} expected")
-    
-    if tool_calls < expected_calls:
-        logger.error(f"🚨 CRITICAL: get_entity_news only called {tool_calls} times, expected {expected_calls}!")
-        logger.error(f"The agent did not fetch news for all entities!")
-        print(f"  ⚠️  WARNING: Only {tool_calls} tool calls made, expected {expected_calls}")
-    
-    # Check for entities with empty news (this indicates the tool wasn't called properly)
+    # Check for entities with empty news
     entities_with_no_news = [e.entity_name for e in news_data.entities if len(e.news) == 0]
     if entities_with_no_news:
-        logger.error(f"🚨 CRITICAL: {len(entities_with_no_news)} entities have NO news articles: {entities_with_no_news}")
-        logger.error(f"This means get_entity_news was not called or returned empty results for these entities!")
-        print(f"\n⚠️  WARNING: {len(entities_with_no_news)} entities have no news:")
-        for name in entities_with_no_news[:5]:
-            print(f"  - {name}")
-        if len(entities_with_no_news) > 5:
-            print(f"  ... and {len(entities_with_no_news) - 5} more")
+        logger.warning(f"⚠️ {len(entities_with_no_news)} entities have NO news articles: {entities_with_no_news}")
+        print(f"  ⚠️  {len(entities_with_no_news)} entities have no news")
     
     print(f"✓ Aggregated {total_articles} news articles across {len(news_data.entities)} entities")
     
-    # Step 3: Sentiment Analysis (returns SentimentAnalysisOutput)
-    # Process entities in batches to avoid token limits, with parallel processing for speed
+    # Log Step 2 timing
+    step2_elapsed = time.perf_counter() - step2_start_time
+    logger.info(f"⏱️  Step 2 completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
+    print(f"⏱️  Step 2 completed in {step2_elapsed:.2f} seconds")
+    
+    # Step 3: Sentiment Analysis (returns SentimentAnalysisOutput) - PARALLEL PROCESSING
+    step3_start_time = time.perf_counter()
     logger.info("-"*60)
-    logger.info("STEP 3: Sentiment Analysis - Starting...")
-    logger.debug(f"Agent: {sentiment_analysis_agent.name}")
-    logger.debug(f"Agent tools: {[t.name for t in sentiment_analysis_agent.tools]}")
+    logger.info("STEP 3: Sentiment Analysis - Starting parallel processing...")
     logger.debug(f"Analyzing {total_articles} articles across {len(news_data.entities)} entities")
     
     print("\n" + "-"*60)
-    print("Step 3: Sentiment Analysis - Analyzing sentiment signals...")
-    print(f"Processing {len(news_data.entities)} entities in parallel batches...")
+    print("Step 3: Sentiment Analysis - Analyzing sentiment signals in parallel...")
+    print(f"  Articles: {total_articles} total")
+    print(f"  Concurrency: {MAX_CONCURRENT_SENTIMENT_AGENTS} agents at a time")
     
-    # Process entities in batches of 2 to avoid token limits
-    BATCH_SIZE = 2
-    MAX_CONCURRENT_BATCHES = 3  # Process up to 3 batches in parallel to avoid rate limits
-    total_entities = len(news_data.entities)
-    total_batches = (total_entities + BATCH_SIZE - 1) // BATCH_SIZE
+    # Create semaphore to limit concurrent agents
+    sentiment_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SENTIMENT_AGENTS)
     
-    async def process_batch(batch_num: int, batch_entities: list, batch_start: int, batch_end: int):
-        """Process a single batch of entities and return the sentiment data."""
-        logger.info(f"Processing batch {batch_num}/{total_batches}: entities {batch_start+1}-{batch_end} of {total_entities}")
-        print(f"  Batch {batch_num}/{total_batches}: Processing {len(batch_entities)} entities...")
-        
-        # Create a batch input with just these entities
-        batch_input = NewsAggregationOutput(
-            company_name=news_data.company_name,
-            entities=batch_entities
-        )
-        
-        try:
-            sentiment_result = await runner.run(
-                sentiment_analysis_agent,
-                input=batch_input.model_dump_json()
-            )
-            logger.debug(f"Batch {batch_num} sentiment analysis completed")
-            
-            # Get the structured output for this batch
-            batch_sentiment_data = sentiment_result.final_output_as(SentimentAnalysisOutput)
-            
-            batch_articles = sum(len(e.news) for e in batch_sentiment_data.entities)
-            batch_tokens = sum(
-                len(article.sentiment_tokens)
-                for entity in batch_sentiment_data.entities
-                for article in entity.news
-            )
-            logger.info(f"✓ Batch {batch_num}: Processed {batch_articles} articles, generated {batch_tokens} tokens")
-            print(f"    ✓ Batch {batch_num}: {batch_articles} articles, {batch_tokens} tokens")
-            
-            return batch_sentiment_data.entities, batch_num
-            
-        except Exception as e:
-            logger.error(f"Failed to process batch {batch_num}: {e}", exc_info=True)
-            logger.error(f"Batch entities: {[e.entity_name for e in batch_entities]}")
-            print(f"  ⚠️  ERROR in batch {batch_num}: {e}")
-            return None, batch_num
-    
-    # Create all batch tasks
-    batch_tasks = []
-    for batch_start in range(0, total_entities, BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, total_entities)
-        batch_entities = news_data.entities[batch_start:batch_end]
-        batch_num = (batch_start // BATCH_SIZE) + 1
-        
-        batch_tasks.append(
-            process_batch(batch_num, batch_entities, batch_start, batch_end)
-        )
-    
-    # Process batches in parallel with concurrency limit
-    all_sentiment_entities_dict = {}  # Use dict to deduplicate and maintain order
-    completed_batches = set()
-    
-    # Process batches in chunks to respect concurrency limit
-    for i in range(0, len(batch_tasks), MAX_CONCURRENT_BATCHES):
-        chunk = batch_tasks[i:i + MAX_CONCURRENT_BATCHES]
-        chunk_batch_nums = [j + 1 for j in range(i, min(i + MAX_CONCURRENT_BATCHES, len(batch_tasks)))]
-        logger.info(f"Processing batches {chunk_batch_nums} in parallel...")
-        
-        results = await asyncio.gather(*chunk, return_exceptions=True)
-        
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Batch task failed with exception: {result}", exc_info=True)
-                continue
-            
-            entities, batch_num = result
-            if entities is not None:
-                # Store entities by name to maintain order and avoid duplicates
-                for entity in entities:
-                    all_sentiment_entities_dict[entity.entity_name] = entity
-                completed_batches.add(batch_num)
-    
-    # Maintain original entity order from input
-    ordered_entities = []
+    # Create a flat list of all articles with their entity info
+    article_tasks_data = []
     for entity in news_data.entities:
-        if entity.entity_name in all_sentiment_entities_dict:
-            ordered_entities.append(all_sentiment_entities_dict[entity.entity_name])
+        for article in entity.news:
+            article_tasks_data.append({
+                "entity_name": entity.entity_name,
+                "relationship_strength": entity.relationship_strength,
+                "relationship_type": entity.relationship_type,
+                "article": article
+            })
+    
+    total_articles_count = len(article_tasks_data)
+    logger.info(f"Processing {total_articles_count} articles with max {MAX_CONCURRENT_SENTIMENT_AGENTS} concurrent agents")
+    
+    def extract_retry_after(error_message: str) -> float:
+        """Extract retry-after time from error message."""
+        # Look for patterns like "Please try again in 4.03s" or "retry_after: 4.03"
+        match = re.search(r'(?:try again in|retry_after[:\s]+)(\d+\.?\d*)\s*s', error_message, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+        return None
+    
+    def is_rate_limit_error(error: Exception) -> bool:
+        """Check if error is a rate limit error."""
+        error_str = str(error)
+        return "429" in error_str or "rate_limit" in error_str.lower() or "rate limit" in error_str.lower()
+    
+    async def process_single_article_sentiment(article_data: dict, article_index: int, total_articles: int):
+        """Process sentiment for a single article using a dedicated agent instance with retry logic."""
+        async with sentiment_semaphore:
+            entity_name = article_data["entity_name"]
+            article = article_data["article"]
+            logger.info(f"Processing article {article_index + 1}/{total_articles}: {entity_name} - {article.title[:50]}...")
+            
+            # Create input for single article
+            single_article_input = {
+                "company_name": company_name,
+                "entity_name": entity_name,
+                "relationship_strength": article_data["relationship_strength"],
+                "relationship_type": article_data["relationship_type"],
+                "article": {
+                    "url": article.url,
+                    "title": article.title,
+                    "source": article.source,
+                    "published_date": article.published_date
+                }
+            }
+            
+            # Retry logic with exponential backoff
+            last_error = None
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    runner = Runner()
+                    result = await runner.run(
+                        single_article_sentiment_agent,
+                        input=json.dumps(single_article_input)
+                    )
+                    
+                    # Get structured output
+                    single_result = result.final_output_as(SingleArticleSentimentOutput)
+                    token_count = len(single_result.article.sentiment_tokens)
+                    logger.info(f"✓ Article {article_index + 1}/{total_articles} ({entity_name}): {token_count} tokens")
+                    
+                    return single_result, article_index, entity_name
+                    
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    # Check if it's a rate limit error
+                    if is_rate_limit_error(e) and attempt < MAX_RETRIES:
+                        # Extract retry-after time from error message
+                        retry_after = extract_retry_after(error_str)
+                        
+                        if retry_after:
+                            # Add a small buffer (10%) to the retry time
+                            wait_time = retry_after * 1.1
+                            logger.warning(f"Rate limit hit for article {article_index + 1}, waiting {wait_time:.2f}s before retry {attempt + 1}/{MAX_RETRIES}")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            # Exponential backoff: 2^attempt seconds
+                            wait_time = (2 ** attempt) + (attempt * 0.5)
+                            logger.warning(f"Rate limit hit for article {article_index + 1}, using exponential backoff: {wait_time:.2f}s (retry {attempt + 1}/{MAX_RETRIES})")
+                            await asyncio.sleep(wait_time)
+                    else:
+                        # Not a rate limit error or max retries reached
+                        break
+            
+            # All retries failed or non-rate-limit error
+            logger.error(f"Failed to process article {article_index + 1} ({entity_name}) after {MAX_RETRIES + 1} attempts: {last_error}", exc_info=True)
+            print(f"  ⚠️  ERROR processing article {article_index + 1}: {last_error}")
+            
+            # Return article with empty sentiment tokens on error
+            error_article = NewsArticle(
+                url=article.url,
+                title=article.title,
+                source=article.source,
+                published_date=article.published_date,
+                sentiment_tokens=[]
+            )
+            error_result = SingleArticleSentimentOutput(
+                company_name=company_name,
+                entity_name=entity_name,
+                relationship_strength=article_data["relationship_strength"],
+                relationship_type=article_data["relationship_type"],
+                article=error_article
+            )
+            return error_result, article_index, entity_name
+    
+    # Create tasks for all articles
+    article_tasks = [
+        process_single_article_sentiment(data, idx, total_articles_count)
+        for idx, data in enumerate(article_tasks_data)
+    ]
+    
+    # Process all articles in parallel with concurrency limit
+    logger.info(f"Launching {len(article_tasks)} parallel sentiment analysis agents...")
+    results = await asyncio.gather(*article_tasks, return_exceptions=True)
+    
+    # Aggregate results by entity, maintaining order
+    entity_articles_dict = {}  # entity_name -> list of articles with sentiment
+    successful_count = 0
+    failed_count = 0
+    
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(f"Article task failed with exception: {result}", exc_info=True)
+            failed_count += 1
+            continue
+        
+        article_result, article_index, entity_name = result
+        if article_result:
+            if entity_name not in entity_articles_dict:
+                entity_articles_dict[entity_name] = {
+                    "entity_name": entity_name,
+                    "relationship_strength": article_result.relationship_strength,
+                    "relationship_type": article_result.relationship_type,
+                    "articles": []
+                }
+            entity_articles_dict[entity_name]["articles"].append(article_result.article)
+            successful_count += 1
+    
+    # Build ordered entities list matching input order
+    ordered_entities = []
+    for input_entity in news_data.entities:
+        entity_name = input_entity.entity_name
+        if entity_name in entity_articles_dict:
+            entity_data = entity_articles_dict[entity_name]
+            ordered_entities.append({
+                "entity_name": entity_name,
+                "relationship_strength": entity_data["relationship_strength"],
+                "relationship_type": entity_data["relationship_type"],
+                "articles": entity_data["articles"]
+            })
+        else:
+            # Entity with no articles processed (shouldn't happen, but handle gracefully)
+            logger.warning(f"Entity {entity_name} has no processed articles")
+            ordered_entities.append({
+                "entity_name": entity_name,
+                "relationship_strength": input_entity.relationship_strength,
+                "relationship_type": input_entity.relationship_type,
+                "articles": []
+            })
+    
+    # Convert to proper schema objects
+    sentiment_entities = []
+    for entity_dict in ordered_entities:
+        sentiment_entities.append(EntityWithSentiment(
+            entity_name=entity_dict["entity_name"],
+            relationship_strength=entity_dict["relationship_strength"],
+            relationship_type=entity_dict["relationship_type"],
+            news=entity_dict["articles"]
+        ))
     
     sentiment_data = SentimentAnalysisOutput(
-        company_name=news_data.company_name,
-        entities=ordered_entities
+        company_name=company_name,
+        entities=sentiment_entities
     )
     
-    logger.info(f"✓ Completed sentiment analysis for {len(completed_batches)}/{total_batches} batches")
-    print(f"✓ Completed {len(completed_batches)}/{total_batches} batches")
+    logger.info(f"✓ Completed parallel sentiment analysis: {successful_count} successful, {failed_count} failed")
+    print(f"  ✓ Processed {successful_count}/{total_articles_count} articles")
+    if failed_count > 0:
+        print(f"  ⚠️  {failed_count} articles failed")
     
     # Validate that all entities and articles were processed
     input_entity_count = len(news_data.entities)
@@ -358,6 +619,7 @@ async def run_trading_signal_pipeline(company_name: str):
     logger.info(f"✓ Saved Step 3 output to: {step3_file}")
     
     # Check if all entities from step 2 are in step 3
+    step2_entities = set(e.entity_name for e in news_data.entities)
     step3_entities = set(e.entity_name for e in sentiment_data.entities)
     missing_entities_step3 = step2_entities - step3_entities
     if missing_entities_step3:
@@ -372,6 +634,11 @@ async def run_trading_signal_pipeline(company_name: str):
                 logger.debug(f"  Article '{article.title[:50]}...': {len(article.sentiment_tokens)} tokens")
     
     print(f"✓ Generated {total_tokens} sentiment tokens across all articles")
+    
+    # Log Step 3 timing
+    step3_elapsed = time.perf_counter() - step3_start_time
+    logger.info(f"⏱️  Step 3 completed in {step3_elapsed:.2f} seconds ({step3_elapsed/60:.2f} minutes)")
+    print(f"⏱️  Step 3 completed in {step3_elapsed:.2f} seconds")
     
     # Show sample sentiment tokens
     logger.debug("Sample sentiment tokens:")
@@ -390,6 +657,9 @@ async def run_trading_signal_pipeline(company_name: str):
                 shown_count += 1
                 if shown_count >= 2:
                     break
+    
+    # Calculate total pipeline time
+    total_pipeline_time = time.perf_counter() - pipeline_start_time
     
     print(f"\n{'='*60}")
     print("Pipeline Complete!")
@@ -411,7 +681,24 @@ async def run_trading_signal_pipeline(company_name: str):
     logger.info(f"Total news articles: {total_articles}")
     logger.info(f"Total sentiment tokens: {total_tokens} (across all articles)")
     
+    # Timing Summary
+    logger.info("-"*60)
+    logger.info("⏱️  TIMING SUMMARY")
+    logger.info("-"*60)
+    logger.info(f"Step 1 - Entity Enrichment: {step1_elapsed:.2f}s ({step1_elapsed/60:.2f} min)")
+    logger.info(f"Step 2 - News Aggregation: {step2_elapsed:.2f}s ({step2_elapsed/60:.2f} min)")
+    logger.info(f"Step 3 - Sentiment Analysis: {step3_elapsed:.2f}s ({step3_elapsed/60:.2f} min)")
+    logger.info(f"Total Pipeline Time: {total_pipeline_time:.2f}s ({total_pipeline_time/60:.2f} min)")
+    
+    # Print timing summary to console
+    print(f"\n⏱️  Timing Summary:")
+    print(f"  Step 1: {step1_elapsed:.2f}s ({step1_elapsed/total_pipeline_time*100:.1f}%)")
+    print(f"  Step 2: {step2_elapsed:.2f}s ({step2_elapsed/total_pipeline_time*100:.1f}%)")
+    print(f"  Step 3: {step3_elapsed:.2f}s ({step3_elapsed/total_pipeline_time*100:.1f}%)")
+    print(f"  Total:  {total_pipeline_time:.2f}s ({total_pipeline_time/60:.2f} min)")
+    
     # Print intermediate files saved
+    logger.info("-"*60)
     logger.info("Intermediate outputs saved:")
     logger.info(f"  - {step1_file}")
     logger.info(f"  - {step2_file}")

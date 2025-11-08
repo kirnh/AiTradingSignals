@@ -84,7 +84,7 @@ class NewsArticle(BaseModel):
     source: str = Field(description="Source of the news (e.g., 'Reuters', 'Bloomberg')")
     title: str = Field(description="Title of the article", default="")
     sentiment_tokens: List[SentimentToken] = Field(
-        description="List of sentiment signals extracted from this article. MUST contain atleast 5 distinct sentiment tokens per article. Each token should represent a different aspect, event, or implication from the article.",
+        description="List of sentiment signals extracted from this article. MUST contain at least 5 distinct sentiment tokens per article. Each token should represent a different aspect, event, or implication from the article.",
         min_length=5,
         max_length=15
     )
@@ -106,6 +106,22 @@ class SentimentAnalysisOutput(BaseModel):
     entities: List[EntityWithSentiment] = Field(
         description="List of entities with news and sentiment analysis"
     )
+
+
+# Single Entity/Article Processing Schemas (for parallel agent processing)
+class SingleEntityNewsOutput(BaseModel):
+    """Output schema for a single entity news aggregation (Step 2 - parallel processing)."""
+    company_name: str = Field(description="The company being analyzed")
+    entity: EntityWithNews = Field(description="Single entity with its news articles")
+
+
+class SingleArticleSentimentOutput(BaseModel):
+    """Output schema for a single article sentiment analysis (Step 3 - parallel processing)."""
+    company_name: str = Field(description="The company being analyzed")
+    entity_name: str = Field(description="Name of the entity this article belongs to")
+    relationship_strength: float = Field(ge=0.0, le=1.0, description="Relationship strength of the entity")
+    relationship_type: str = Field(description="Relationship type of the entity")
+    article: NewsArticle = Field(description="Single news article with sentiment tokens")
 
 
 # Example usage and validation
