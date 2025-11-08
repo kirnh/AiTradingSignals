@@ -60,8 +60,15 @@ MAX_CONCURRENT_NEWS_AGENTS = int(os.getenv("MAX_CONCURRENT_NEWS_AGENTS", "10"))
 MAX_CONCURRENT_SENTIMENT_AGENTS = int(os.getenv("MAX_CONCURRENT_SENTIMENT_AGENTS", "5"))  # Reduced default to avoid rate limits
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))  # Maximum retries for rate limit errors
 
+# Configurable limits for entities, news, and sentiment tokens
+MAX_ENTITIES = int(os.getenv("MAX_ENTITIES", "10"))
+MAX_NEWS_PER_ENTITY = int(os.getenv("MAX_NEWS_PER_ENTITY", "10"))
+MIN_SENTIMENT_TOKENS_PER_ARTICLE = int(os.getenv("MIN_SENTIMENT_TOKENS_PER_ARTICLE", "5"))
+MAX_SENTIMENT_TOKENS_PER_ARTICLE = int(os.getenv("MAX_SENTIMENT_TOKENS_PER_ARTICLE", "15"))
+
 logger.info(f"Concurrency limits: News agents={MAX_CONCURRENT_NEWS_AGENTS}, Sentiment agents={MAX_CONCURRENT_SENTIMENT_AGENTS}")
 logger.info(f"Retry configuration: Max retries={MAX_RETRIES} for rate limit errors")
+logger.info(f"Entity/News/Token limits: Max entities={MAX_ENTITIES}, Max news per entity={MAX_NEWS_PER_ENTITY}, Sentiment tokens per article={MIN_SENTIMENT_TOKENS_PER_ARTICLE}-{MAX_SENTIMENT_TOKENS_PER_ARTICLE}")
 
 
 # Create the three agents with their respective tools and structured outputs
@@ -161,6 +168,17 @@ async def run_trading_signal_pipeline(company_name: str):
         logger.error(f"Failed to add self company entity to output: {e}", exc_info=True)
         print(f"⚠️  Warning: Failed to add self company entity to output: {e}")
         raise
+    
+    # Enforce MAX_ENTITIES limit
+    if len(enrichment_data.entities) > MAX_ENTITIES:
+        logger.warning(f"⚠️ Found {len(enrichment_data.entities)} entities, limiting to MAX_ENTITIES={MAX_ENTITIES}")
+        print(f"⚠️ Limiting from {len(enrichment_data.entities)} to {MAX_ENTITIES} entities")
+        # Keep the highest relationship strength entities plus the self entity
+        self_entity = [e for e in enrichment_data.entities if e.relationship_type == "self"]
+        other_entities = [e for e in enrichment_data.entities if e.relationship_type != "self"]
+        # Sort by relationship strength and take top (MAX_ENTITIES - 1) to make room for self
+        other_entities.sort(key=lambda x: x.relationship_strength, reverse=True)
+        enrichment_data.entities = other_entities[:MAX_ENTITIES-1] + self_entity
     
     logger.info(f"✓ Found {len(enrichment_data.entities)} related entities")
     
@@ -306,6 +324,12 @@ async def run_trading_signal_pipeline(company_name: str):
     # Sort by original index to maintain order
     entity_results.sort(key=lambda x: x[1])
     ordered_entities = [entity for entity, _ in entity_results]
+    
+    # Enforce MAX_NEWS_PER_ENTITY limit on each entity
+    for entity in ordered_entities:
+        if len(entity.news) > MAX_NEWS_PER_ENTITY:
+            logger.warning(f"⚠️ Entity '{entity.entity_name}' has {len(entity.news)} articles, limiting to MAX_NEWS_PER_ENTITY={MAX_NEWS_PER_ENTITY}")
+            entity.news = entity.news[:MAX_NEWS_PER_ENTITY]
     
     # Create aggregated output
     news_data = NewsAggregationOutput(

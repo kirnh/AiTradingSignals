@@ -3,8 +3,17 @@ Pydantic schemas for structured outputs from agents.
 Similar to LangChain's structured output approach.
 """
 
+import os
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List
+
+# Load environment variables
+load_dotenv()
+
+# Get configurable limits
+MIN_SENTIMENT_TOKENS_PER_ARTICLE = int(os.getenv("MIN_SENTIMENT_TOKENS_PER_ARTICLE", "5"))
+MAX_SENTIMENT_TOKENS_PER_ARTICLE = int(os.getenv("MAX_SENTIMENT_TOKENS_PER_ARTICLE", "15"))
 
 
 # Entity Enrichment Agent Output Schema
@@ -84,9 +93,9 @@ class NewsArticle(BaseModel):
     source: str = Field(description="Source of the news (e.g., 'Reuters', 'Bloomberg')")
     title: str = Field(description="Title of the article", default="")
     sentiment_tokens: List[SentimentToken] = Field(
-        description="List of sentiment signals extracted from this article. MUST contain at least 5 distinct sentiment tokens per article. Each token should represent a different aspect, event, or implication from the article.",
-        min_length=5,
-        max_length=15
+        description=f"List of sentiment signals extracted from this article. MUST contain at least {MIN_SENTIMENT_TOKENS_PER_ARTICLE} distinct sentiment tokens per article. Each token should represent a different aspect, event, or implication from the article.",
+        min_length=MIN_SENTIMENT_TOKENS_PER_ARTICLE,
+        max_length=MAX_SENTIMENT_TOKENS_PER_ARTICLE
     )
 
 

@@ -62,18 +62,60 @@ The `@function_tool` decorator:
 
 1. Install dependencies using `uv sync` or `pip install -e .`
 
-2. Create a `.env` file by copying `.env.example` to `.env`, then edit it to add your API keys. The `.env` file should contain:
-   - `OPENAI_API_KEY`: Your OpenAI API key (required)
-   - `NEWS_API_PROVIDER`: Set to `gnews` or `newsapi` to choose which provider to use
-   - `GNEWS_API_KEY`: Your GNews API key (if using GNews)
-   - `NEWSAPI_KEY`: Your NewsAPI key (if using NewsAPI)
-
-**News API Configuration:**
-- Set `NEWS_API_PROVIDER` to `'gnews'` (default) or `'newsapi'` to choose which provider to use
-- Set the corresponding API key (`GNEWS_API_KEY` or `NEWSAPI_KEY`)
-- If not set, default API keys are used (may have rate limits)
+2. Create a `.env` file with your configuration. See the Configuration section below for all available options.
 
 **Note:** The `.env` file is automatically loaded when the application starts. You don't need to export environment variables manually.
+
+## Configuration
+
+All configuration is done via environment variables in a `.env` file. Here are the available options:
+
+### Required Configuration
+- `OPENAI_API_KEY`: Your OpenAI API key (required)
+
+### News API Configuration
+- `NEWS_API_PROVIDER`: Set to `gnews` (default) or `newsapi` to choose which provider to use
+- `GNEWS_API_KEY`: Your GNews API key (get free key at https://gnews.io)
+- `NEWSAPI_KEY`: Your NewsAPI key (get free key at https://newsapi.org)
+
+### Logging Configuration
+- `LOG_LEVEL`: Set to `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` (default: `INFO`)
+
+### Concurrency Configuration
+- `MAX_CONCURRENT_NEWS_AGENTS`: Maximum number of concurrent agents processing news for entities (default: `10`)
+- `MAX_CONCURRENT_SENTIMENT_AGENTS`: Maximum number of concurrent agents processing sentiment analysis (default: `5`)
+- `MAX_RETRIES`: Maximum retries for rate limit errors (default: `3`)
+
+### Entity, News, and Token Limits
+- `MAX_ENTITIES`: Maximum number of related entities to find per company (default: `10`)
+- `MAX_NEWS_PER_ENTITY`: Maximum number of news articles to fetch per entity (default: `10`)
+- `MIN_SENTIMENT_TOKENS_PER_ARTICLE`: Minimum number of sentiment tokens to extract per article (default: `5`)
+- `MAX_SENTIMENT_TOKENS_PER_ARTICLE`: Maximum number of sentiment tokens to extract per article (default: `15`)
+
+### Example `.env` file
+
+```bash
+# OpenAI API Configuration
+OPENAI_API_KEY=your-openai-api-key-here
+
+# News API Configuration
+NEWS_API_PROVIDER=gnews
+GNEWS_API_KEY=your-gnews-api-key-here
+
+# Logging Configuration
+LOG_LEVEL=INFO
+
+# Concurrency Configuration
+MAX_CONCURRENT_NEWS_AGENTS=10
+MAX_CONCURRENT_SENTIMENT_AGENTS=5
+MAX_RETRIES=3
+
+# Entity, News, and Token Limits
+MAX_ENTITIES=10
+MAX_NEWS_PER_ENTITY=10
+MIN_SENTIMENT_TOKENS_PER_ARTICLE=5
+MAX_SENTIMENT_TOKENS_PER_ARTICLE=15
+```
 
 ## Verbose Logging
 
@@ -152,14 +194,7 @@ The pipeline processes data through three stages:
 
 ## API Keys
 
-The system uses the following external APIs:
-
-- **OpenAI API**: Required for agent operations (set `OPENAI_API_KEY`)
-- **News API**: Configurable news provider (set `NEWS_API_PROVIDER` to choose):
-  - **GNews** (default): Set `GNEWS_API_KEY` - Get free key at https://gnews.io
-  - **NewsAPI**: Set `NEWSAPI_KEY` - Get free key at https://newsapi.org
-
-**Example configuration in `.env` file**: Set `NEWS_API_PROVIDER` to `gnews` or `newsapi`, then provide the corresponding API key (`GNEWS_API_KEY` or `NEWSAPI_KEY`).
+See the Configuration section above for details on setting up API keys.
 
 ## Notes
 

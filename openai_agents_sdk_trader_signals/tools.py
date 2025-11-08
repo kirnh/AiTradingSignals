@@ -20,6 +20,9 @@ NEWS_API_PROVIDER = os.getenv("NEWS_API_PROVIDER", "gnews").lower()  # 'gnews' o
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY", "db2651be6ce35c4956fbe1fc2a5a8cdb")
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "48c51ab301094753bb46f899b6b5a103")
 
+# Configurable limit for news articles per entity
+MAX_NEWS_PER_ENTITY = int(os.getenv("MAX_NEWS_PER_ENTITY", "10"))
+
 
 
 def _fetch_news_gnews(entity_name: str, num_results: int = 10) -> list:
@@ -121,22 +124,26 @@ def _fetch_news_newsapi(entity_name: str, num_results: int = 10) -> list:
 
 
 @function_tool
-def get_entity_news(entity_name: str, num_results: int = 10) -> str:
+def get_entity_news(entity_name: str, num_results: int = None) -> str:
     """
     Fetch news articles for an entity using a configurable news API (GNews or NewsAPI).
     Configure via NEWS_API_PROVIDER environment variable ('gnews' or 'newsapi').
     
     Args:
         entity_name: Name of the entity to fetch news for
-        num_results: Number of articles to fetch (default: 10)
+        num_results: Number of articles to fetch (default: uses MAX_NEWS_PER_ENTITY env var, defaults to 10)
         
     Returns:
         JSON string containing news articles with url, published_date, source, title, description
     """
+    # Use configured default if not specified
+    if num_results is None:
+        num_results = MAX_NEWS_PER_ENTITY
+    
     _tool_call_counter["get_entity_news"] += 1
     call_count = _tool_call_counter["get_entity_news"]
     logger.info(f"🔧 TOOL CALL #{call_count}: get_entity_news(entity_name='{entity_name}', num_results={num_results})")
-    logger.info(f"Using news API provider: {NEWS_API_PROVIDER}")
+    logger.info(f"Using news API provider: {NEWS_API_PROVIDER} (MAX_NEWS_PER_ENTITY={MAX_NEWS_PER_ENTITY})")
     print(f"  → Tool call #{call_count}: Fetching news for '{entity_name}' using {NEWS_API_PROVIDER}")
     
     try:
